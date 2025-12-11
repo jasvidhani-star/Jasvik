@@ -1,0 +1,5 @@
+{
+  "name": "n8n-youtube-cartoon",
+  "version": "1.0.0",
+  "scripts": { "start": "n8n" }
+}
