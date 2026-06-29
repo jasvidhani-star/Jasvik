@@ -5,429 +5,580 @@ import random
 import sys
 import textwrap
 import math
+import re
+import json
+import urllib.parse
+import io
 
-# ============ STEP 1: Setup & Imports ============
+# ============ STEP 1: Imports ============
 try:
-    # ✅ NEW API: google-genai (NOT google.generativeai)
+    import requests
     from google import genai
-    from google.genai import types
     from gtts import gTTS
     from moviepy.editor import (ImageClip, AudioFileClip, CompositeVideoClip, 
-                                TextClip, ColorClip, concatenate_videoclips,
-                                ImageSequenceClip)
+                                TextClip, ColorClip, ImageSequenceClip,
+                                VideoFileClip, concatenate_videoclips)
     from moviepy.video.fx.all import fadein, fadeout
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
     from PIL import Image, ImageDraw, ImageFont
     import numpy as np
 except ImportError as e:
-    print(f"❌ Missing dependency: {e}")
+    print(f"❌ Missing: {e}")
     sys.exit(1)
 
-# ============ STEP 2: Setup Secrets ============
-print("🔐 Setting up credentials...")
+# ============ STEP 2: Setup ============
+print("🔐 Setup...")
 try:
     with open("client_secret.json", "w", encoding="utf-8") as f:
-        f.write(os.environ["CLIENT_SECRET_JSON"])
+        f.write(os.environ.get("YOUTUBE_CLIENT_SECRET", "{}"))
     
-    token_data = base64.b64decode(os.environ["TOKEN_PICKLE_BASE64"])
+    token_data = base64.b64decode(os.environ.get("YOUTUBE_TOKEN_PICKLE_BASE64", ""))
     with open("token.pickle", "wb") as f:
         f.write(token_data)
-    print("✅ Credentials setup complete!")
+    
+    PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+    
+    print("✅ Ready")
 except Exception as e:
     print(f"❌ Error: {e}")
-    sys.exit(1)
 
-# ============ STEP 3: Topic Selection ============
-topics = [
-    {
-        "title": "बच्चों के लिए 5 जादुई गणित ट्रिक्स",
-        "hook": "2 सेकंड में गुणा करना सीखें!",
-        "category": "education",
-        "duration": 150
-    },
-    {
-        "title": "बच्चों में आत्मविश्वास बढ़ाने के 3 सीक्रेट तरीके",
-        "hook": "90% पेरेंट्स ये गलती करते हैं...",
-        "category": "parenting",
-        "duration": 180
-    },
-    {
-        "title": "बच्चों के लिए कोडिंग क्यों ज़रूरी है? 2026",
-        "hook": "भविष्य की सबसे बड़ी स्किल!",
-        "category": "technology",
-        "duration": 200
-    },
-    {
-        "title": "बच्चों को पैसे की बचत कैसे सिखाएं?",
-        "hook": "6 साल में Smart Investor!",
-        "category": "finance",
-        "duration": 160
-    },
-    {
-        "title": "घर पर 3 आसान विज्ञान प्रयोग",
-        "hook": "रसोई में Science Magic!",
-        "category": "science",
-        "duration": 170
-    },
-    {
-        "title": "बच्चों का स्क्रीन टाइम कम करें",
-        "hook": "बच्चा फोन छोड़ देगा!",
-        "category": "parenting",
-        "duration": 140
-    },
-    {
-        "title": "बच्चों के लिए प्रेरणादायक कहानी",
-        "hook": "एक कहानी जो बदल देगी सोच!",
-        "category": "story",
-        "duration": 220
-    },
-    {
-        "title": "बच्चों की एकाग्रता बढ़ाने के 5 तरीके",
-        "hook": "पढ़ाई में मन नहीं लगता?",
-        "category": "education",
-        "duration": 155
-    },
-    {
-        "title": "बच्चों के लिए Best Memory Techniques",
-        "hook": "कभी कुछ नहीं भूलेंगे!",
-        "category": "education",
-        "duration": 175
-    },
-    {
-        "title": "बच्चों में Good Habits कैसे डालें?",
-        "hook": "21 दिन में बदल जाएगा!",
-        "category": "parenting",
-        "duration": 165
-    }
+# ============ STEP 3: PEXELS - Download Real Stock Videos ============
+def search_pexels_videos(query, per_page=5):
+    """Search and download free stock videos from Pexels"""
+    try:
+        if not PEXELS_API_KEY:
+            print("⚠️ No Pexels API key")
+            return []
+            
+        url = "https://api.pexels.com/videos/search"
+        headers = {"Authorization": PEXELS_API_KEY}
+        params = {
+            "query": query,
+            "per_page": per_page,
+            "orientation": "landscape",
+            "size": "medium"
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        data = response.json()
+        
+        videos = []
+        if "videos" in data:
+            for video in data["videos"]:
+                # Get best quality MP4
+                best_url = None
+                best_quality = 0
+                
+                for file in video.get("video_files", []):
+                    if file.get("file_type") == "video/mp4":
+                        quality = file.get("width", 0) * file.get("height", 0)
+                        if quality > best_quality:
+                            best_quality = quality
+                            best_url = file.get("link")
+                
+                if best_url:
+                    videos.append({
+                        "url": best_url,
+                        "duration": video.get("duration", 15),
+                        "width": video.get("width", 1920),
+                        "height": video.get("height", 1080),
+                        "description": video.get("description", "")
+                    })
+        
+        print(f"✅ Pexels: {len(videos)} videos found for '{query}'")
+        return videos
+        
+    except Exception as e:
+        print(f"❌ Pexels error: {e}")
+        return []
+
+def download_video(url, filename):
+    """Download video from URL"""
+    try:
+        response = requests.get(url, stream=True, timeout=60)
+        with open(filename, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return True
+    except Exception as e:
+        print(f"❌ Download error: {e}")
+        return False
+
+# ============ STEP 4: WIKIPEDIA CONTENT ============
+def fetch_wikipedia(topic):
+    try:
+        search_url = "https://en.wikipedia.org/w/api.php"
+        params = {
+            "action": "query", "list": "search", "srsearch": topic,
+            "format": "json", "srlimit": 1
+        }
+        r = requests.get(search_url, params=params, timeout=20)
+        data = r.json()
+        
+        if not data["query"]["search"]:
+            return None
+            
+        title = data["query"]["search"][0]["title"]
+        
+        params = {
+            "action": "query", "prop": "extracts", "titles": title,
+            "explaintext": True, "exchars": 3000, "format": "json"
+        }
+        r = requests.get(search_url, params=params, timeout=20)
+        data = r.json()
+        
+        pages = data["query"]["pages"]
+        page_id = list(pages.keys())[0]
+        content = pages[page_id].get("extract", "")
+        
+        return {
+            "title": title,
+            "content": content[:2500],
+            "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+        }
+    except Exception as e:
+        print(f"❌ Wiki error: {e}")
+        return None
+
+# ============ STEP 5: TOPIC & CONTENT ============
+story_topics = [
+    ("Albert Einstein childhood", "child scientist learning"),
+    ("Marie Curie biography", "woman scientist laboratory"),
+    ("Isaac Newton early life", "apple tree thinking"),
+    ("Helen Keller biography", "blind girl reading"),
+    ("Thomas Edison childhood", "boy experimenting"),
+    ("Mother Teresa biography", "woman helping children"),
+    ("Mahatma Gandhi childhood", "Indian boy studying"),
+    ("APJ Abdul Kalam biography", "Indian scientist rocket"),
+    ("Swami Vivekananda biography", "Indian monk meditation"),
+    ("Srinivasa Ramanujan biography", "mathematician equations"),
+    ("Kalpana Chawla biography", "woman astronaut space"),
+    ("Sachin Tendulkar childhood", "boy playing cricket"),
+    ("Mary Kom biography", "woman boxing training"),
+    ("Malala Yousafzai biography", "girl studying school"),
+    ("Anne Frank biography", "girl writing diary"),
+    ("Charlie Chaplin childhood", "boy acting comedy"),
+    ("Walt Disney childhood", "boy drawing cartoon"),
+    ("Steve Jobs childhood", "boy computer garage"),
+    ("Oprah Winfrey childhood", "girl reading books"),
+    ("J.K. Rowling childhood", "woman writing story")
 ]
 
-selected = random.choice(topics)
-selected_topic = selected["title"]
-selected_hook = selected["hook"]
-target_duration = selected["duration"]
+selected_topic, pexels_query = random.choice(story_topics)
 print(f"🎯 Topic: {selected_topic}")
-print(f"🎣 Hook: {selected_hook}")
-print(f"⏱️ Duration: {target_duration}s")
+print(f"🎬 Pexels search: {pexels_query}")
 
-# ============ STEP 4: Generate Script with NEW Gemini API ============
-print("🤖 Generating script with Gemini...")
+# Get real content
+wiki_data = fetch_wikipedia(selected_topic)
+real_content = wiki_data["content"] if wiki_data else ""
+
+# Download stock videos
+print("📥 Downloading stock videos...")
+pexels_videos = search_pexels_videos(pexels_query, per_page=3)
+
+video_files = []
+for i, video in enumerate(pexels_videos):
+    fname = f"stock_{i}.mp4"
+    if download_video(video["url"], fname):
+        video_files.append({
+            "file": fname,
+            "duration": video["duration"]
+        })
+
+if not video_files:
+    print("⚠️ No stock videos, will use animated backgrounds")
+
+# ============ STEP 6: GENERATE SCRIPT ============
+print("🤖 Generating script...")
 
 try:
-    # ✅ NEW API: google-genai
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    client = genai.Client(api_key=GEMINI_API_KEY)
     
-    prompt = f"""YouTube Video (2-3 minutes) के लिए स्क्रिप्ट लिखो।
+    prompt = f"""YouTube Kids Story (3-4 minutes) के लिए DRAMATIC Hindi script.
 
 TOPIC: {selected_topic}
-HOOK: {selected_hook}
+FACTS: {real_content[:1500]}
 
 नियम:
-- शुरुआत HOOK से
-- 5-7 points, हर point विस्तार से
-- Real examples
-- CTA आखिर में
-- {target_duration * 2} शब्द
-- सिर्फ Hindi text, no emojis
-- Output: सिर्फ स्क्रिप्ट"""
+- Real facts use karo
+- Story: Setup → Struggle → Success → Lesson
+- 500-600 words
+- Hindi में
+- Emotions: [HAPPY], [SAD], [THINKING], [EXCITED], [PROUD]
+- Moral end mein
+- Output: sirf script"""
 
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt
-    )
+    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
     script = response.text.strip()
     print(f"✅ Script: {len(script.split())} words")
     
 except Exception as e:
-    print(f"❌ Gemini Error: {e}")
-    script = f"{selected_hook}\n\n{selected_topic} के बारे में जानें। पहला: रोज़ाना अभ्यास। दूसरा: खेल-खेल में सीखना। तीसरा: प्रशंसा। चौथा: सही माहौल। पांचवां: धैर्य। Like, Share, Subscribe!"
-    print("⚠️ Using fallback")
+    print(f"❌ Error: {e}")
+    script = f"""[HAPPY] एक छोटे से गाँव में एक बच्चा रहता था। [THINKING] उसे हमेशा सवाल पूछने की आदत थी। [SAD] लोग उसे चिढ़ाते थे। [EXCITED] लेकिन वो हार नहीं माना! [PROUD] और आज वो दुनिया का सबसे बड़ा Scientist है! Like, Share, Subscribe!"""
 
-# ============ STEP 5: Create Audio ============
+# ============ STEP 7: PARSE SCENES ============
+emotions = ["HAPPY", "SAD", "THINKING", "EXCITED", "ANGRY", "SURPRISED", "PROUD"]
+scene_data = []
+
+script_clean = script
+for emotion in emotions:
+    if f"[{emotion}]" in script:
+        parts = script.split(f"[{emotion}]")
+        for part in parts[1:]:
+            scene_text = part.split("[")[0].strip()[:250]
+            if scene_text:
+                scene_data.append({"emotion": emotion, "text": scene_text})
+
+if not scene_data:
+    paragraphs = [p.strip() for p in script.split('\n') if p.strip() and len(p.strip()) > 20]
+    emotion_cycle = ["HAPPY", "THINKING", "SAD", "EXCITED", "PROUD"]
+    for i, para in enumerate(paragraphs[:5]):
+        scene_data.append({"emotion": emotion_cycle[i % len(emotion_cycle)], "text": para[:250]})
+
+print(f"✅ {len(scene_data)} scenes")
+
+# ============ STEP 8: CREATE CARTOON CHARACTER ============
+def create_cartoon_character(emotion, width=400, height=500):
+    """Create cartoon character with emotion"""
+    img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Colors
+    skin = (255, 220, 180)
+    hair = (80, 50, 30)
+    shirt = (100, 150, 200)
+    pants = (60, 80, 120)
+    
+    cx, cy = width // 2, height // 2
+    
+    # Body
+    draw.ellipse([cx-60, cy+20, cx+60, cy+120], fill=shirt)
+    # Head
+    draw.ellipse([cx-50, cy-80, cx+50, cy+20], fill=skin)
+    # Hair
+    draw.ellipse([cx-55, cy-90, cx+55, cy-40], fill=hair)
+    
+    # Eyes based on emotion
+    if emotion == "HAPPY":
+        draw.ellipse([cx-35, cy-50, cx-15, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx+15, cy-50, cx+35, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx-30, cy-45, cx-20, cy-35], fill=(0, 0, 0))
+        draw.ellipse([cx+20, cy-45, cx+30, cy-35], fill=(0, 0, 0))
+        # Smile
+        draw.arc([cx-30, cy-30, cx+30, cy], 0, 180, fill=(200, 50, 50), width=4)
+        # Cheeks
+        draw.ellipse([cx-45, cy-25, cx-35, cy-15], fill=(255, 180, 180))
+        draw.ellipse([cx+35, cy-25, cx+45, cy-15], fill=(255, 180, 180))
+        
+    elif emotion == "SAD":
+        draw.ellipse([cx-35, cy-50, cx-15, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx+15, cy-50, cx+35, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx-30, cy-45, cx-20, cy-35], fill=(0, 0, 0))
+        draw.ellipse([cx+20, cy-45, cx+30, cy-35], fill=(0, 0, 0))
+        # Sad mouth
+        draw.arc([cx-30, cy-20, cx+30, cy+10], 180, 360, fill=(100, 50, 50), width=4)
+        # Tear
+        draw.ellipse([cx+35, cy-40, cx+42, cy-25], fill=(100, 150, 255))
+        
+    elif emotion == "THINKING":
+        draw.ellipse([cx-35, cy-50, cx-15, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx+15, cy-50, cx+35, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx-30, cy-45, cx-20, cy-35], fill=(0, 0, 0))
+        draw.ellipse([cx+20, cy-45, cx+30, cy-35], fill=(0, 0, 0))
+        # Thinking line
+        draw.line([(cx-20, cy-10), (cx+20, cy-10)], fill=(100, 50, 50), width=3)
+        # Light bulb
+        draw.ellipse([cx+50, cy-100, cx+80, cy-70], fill=(255, 255, 100))
+        draw.polygon([(cx+55, cy-70), (cx+75, cy-70), (cx+65, cy-55)], fill=(255, 200, 50))
+        
+    elif emotion == "EXCITED":
+        # Star eyes
+        for ox, oy in [(cx-25, cy-40), (cx+25, cy-40)]:
+            points = [(ox, oy-15), (ox+5, oy-5), (ox+15, oy), (ox+5, oy+5), 
+                     (ox, oy+15), (ox-5, oy+5), (ox-15, oy), (ox-5, oy-5)]
+            draw.polygon(points, fill=(255, 255, 0))
+        # Big smile
+        draw.arc([cx-40, cy-30, cx+40, cy+20], 0, 180, fill=(200, 50, 50), width=5)
+        # Arms up
+        draw.line([cx-60, cy+40, cx-100, cy-20], fill=skin, width=15)
+        draw.line([cx+60, cy+40, cx+100, cy-20], fill=skin, width=15)
+        
+    elif emotion == "PROUD":
+        draw.ellipse([cx-35, cy-50, cx-15, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx+15, cy-50, cx+35, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx-30, cy-45, cx-20, cy-35], fill=(0, 0, 0))
+        draw.ellipse([cx+20, cy-45, cx+30, cy-35], fill=(0, 0, 0))
+        # Confident smile
+        draw.arc([cx-30, cy-30, cx+30, cy], 0, 180, fill=(200, 50, 50), width=4)
+        # Medal
+        draw.ellipse([cx+40, cy+10, cx+60, cy+30], fill=(255, 215, 0))
+        draw.rectangle([cx+48, cy+30, cx+52, cy+50], fill=(200, 150, 50))
+        
+    else:
+        draw.ellipse([cx-35, cy-50, cx-15, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx+15, cy-50, cx+35, cy-30], fill=(255, 255, 255))
+        draw.ellipse([cx-30, cy-45, cx-20, cy-35], fill=(0, 0, 0))
+        draw.ellipse([cx+20, cy-45, cx+30, cy-35], fill=(0, 0, 0))
+        draw.arc([cx-30, cy-30, cx+30, cy], 0, 180, fill=(200, 50, 50), width=3)
+    
+    # Arms (if not excited)
+    if emotion != "EXCITED":
+        draw.line([cx-60, cy+60, cx-90, cy+100], fill=skin, width=15)
+        draw.line([cx+60, cy+60, cx+90, cy+100], fill=skin, width=15)
+    
+    # Legs
+    draw.line([cx-30, cy+120, cx-40, cy+180], fill=pants, width=20)
+    draw.line([cx+30, cy+120, cx+40, cy+180], fill=pants, width=20)
+    
+    # Shoes
+    draw.ellipse([cx-55, cy+170, cx-25, cy+190], fill=(80, 50, 30))
+    draw.ellipse([cx+25, cy+170, cx+55, cy+190], fill=(80, 50, 30))
+    
+    return img
+
+# Generate characters for each scene
+print("🎨 Creating cartoon characters...")
+character_images = []
+for i, scene in enumerate(scene_data[:5]):
+    print(f"  Character {i+1}: {scene['emotion']}")
+    char = create_cartoon_character(scene["emotion"])
+    char_path = f"char_{i}.png"
+    char.save(char_path)
+    character_images.append({
+        "path": char_path,
+        "emotion": scene["emotion"],
+        "text": scene["text"]
+    })
+
+# ============ STEP 9: CREATE AUDIO ============
 print("🔊 Creating audio...")
+
+clean_script = script
+for emotion in emotions:
+    clean_script = clean_script.replace(f"[{emotion}]", "")
+
 try:
-    tts = gTTS(text=script, lang='hi', slow=False)
+    tts = gTTS(text=clean_script, lang='hi', slow=False)
     tts.save("audio.mp3")
-    print("✅ Audio saved")
 except Exception as e:
-    print(f"❌ Audio Error: {e}")
+    print(f"❌ Audio error: {e}")
     sys.exit(1)
 
-# ============ STEP 6: ANIMATED BACKGROUND ============
-print("🎨 Creating animated backgrounds...")
+audio = AudioFileClip("audio.mp3")
+audio_duration = audio.duration
+target_duration = max(audio_duration, 180)
+duration = min(target_duration, 300)
+print(f"⏱️ Audio: {duration:.1f}s")
+audio.close()
+
+# ============ STEP 10: CREATE FINAL VIDEO ============
+print("🎬 Creating final video...")
 
 W, H = 1920, 1080
-
-def create_animated_bg(frame_num, total_frames, color_scheme="blue"):
-    img = Image.new('RGB', (W, H), color=(10, 10, 30))
-    draw = ImageDraw.Draw(img)
-    progress = frame_num / total_frames
-    
-    # Moving circles
-    for i in range(5):
-        cx = int(W * 0.2 + (W * 0.6) * math.sin(progress * 2 * math.pi + i * 0.8))
-        cy = int(H * 0.3 + (H * 0.4) * math.cos(progress * 2 * math.pi + i * 0.6))
-        r = 150 + int(50 * math.sin(progress * 4 + i))
-        
-        if color_scheme == "blue":
-            color = (30 + i*20, 60 + i*15, 120 + i*25)
-        elif color_scheme == "purple":
-            color = (80 + i*15, 30, 120 + i*20)
-        else:
-            color = (20, 100 + i*20, 80 + i*15)
-        
-        draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=color)
-    
-    # Floating particles
-    for i in range(30):
-        px = int((W * (i / 30) + frame_num * 2) % W)
-        py = int((H * 0.1 * (i % 7) + frame_num) % H)
-        size = 3 + (i % 4)
-        brightness = 150 + int(100 * math.sin(progress * 10 + i))
-        draw.ellipse([px, py, px+size, py+size], fill=(brightness, brightness, 200))
-    
-    # Wave lines
-    for i in range(8):
-        y = int(H * 0.1 + (H * 0.8) * (i / 8))
-        wave = int(50 * math.sin(progress * 4 + i * 0.5))
-        draw.line([(0, y + wave), (W, y - wave)], fill=(40, 60, 100), width=2)
-    
-    return np.array(img)
-
-def create_text_frame(text, subtext="", frame_num=0, total_frames=1, anim_type="bounce"):
-    base = create_animated_bg(frame_num, total_frames)
-    img = Image.fromarray(base)
-    draw = ImageDraw.Draw(img)
-    
-    try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 65)
-        sub_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 38)
-    except:
-        title_font = ImageFont.load_default()
-        sub_font = ImageFont.load_default()
-    
-    # Text animation
-    if anim_type == "bounce":
-        bounce = int(15 * abs(math.sin(frame_num * 0.3)))
-        y_offset = 280 + bounce
-    elif anim_type == "slide":
-        slide = int(30 * (1 - math.exp(-frame_num * 0.1)))
-        y_offset = 280 + slide
-    else:
-        y_offset = 280
-    
-    # Title with glow
-    lines = textwrap.wrap(text, width=28)
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=title_font)
-        tw = bbox[2] - bbox[0]
-        x = (W - tw) // 2
-        
-        for glow in range(5, 0, -1):
-            alpha = int(50 / glow)
-            draw.text((x, y_offset), line, fill=(alpha, alpha, 150 + alpha), font=title_font)
-        draw.text((x, y_offset), line, fill=(255, 255, 255), font=title_font)
-        y_offset += 85
-    
-    # Subtext
-    if subtext:
-        sub_lines = textwrap.wrap(subtext, width=40)
-        y_offset = 520
-        for line in sub_lines:
-            bbox = draw.textbbox((0, 0), line, font=sub_font)
-            tw = bbox[2] - bbox[0]
-            x = (W - tw) // 2
-            draw.text((x, y_offset), line, fill=(255, 215, 0), font=sub_font)
-            y_offset += 50
-    
-    # Progress bar
-    bar_width = int(W * 0.8 * (frame_num / total_frames))
-    draw.rectangle([W*0.1, H-30, W*0.9, H-20], outline=(100, 100, 150), width=2)
-    draw.rectangle([W*0.1, H-30, W*0.1 + bar_width, H-20], fill=(0, 200, 255))
-    
-    # Corner decorations
-    size = 20 + int(10 * math.sin(frame_num * 0.15))
-    draw.polygon([(50, 50), (50+size, 50), (50, 50+size)], fill=(0, 255, 200))
-    draw.polygon([(W-50, 50), (W-50-size, 50), (W-50, 50+size)], fill=(0, 255, 200))
-    draw.polygon([(50, H-50), (50+size, H-50), (50, H-50-size)], fill=(255, 100, 100))
-    draw.polygon([(W-50, H-50), (W-50-size, H-50), (W-50, H-50-size)], fill=(255, 100, 100))
-    
-    return np.array(img)
-
-# ============ STEP 7: Generate Video Frames ============
-print("🎬 Generating animated video...")
-
 fps = 24
-audio = AudioFileClip("audio.mp3")
-duration = min(audio.duration, target_duration)
 total_frames = int(duration * fps)
 
-sections = [s.strip() for s in script.split('\n') if s.strip() and len(s.strip()) > 10]
-if len(sections) < 3:
-    sections = [selected_topic, selected_hook] + sections
-
-frames_per_section = total_frames // max(len(sections), 1)
-
-all_frames = []
-color_schemes = ["blue", "purple", "green", "blue", "purple", "green"]
-
-print(f"Generating {total_frames} frames...")
-
-for sec_idx, section in enumerate(sections[:6]):
-    scheme = color_schemes[sec_idx % len(color_schemes)]
+# If we have stock videos, use them as background
+if video_files:
+    print("🎬 Using Pexels stock videos as background...")
     
-    for f in range(frames_per_section):
-        frame_num = sec_idx * frames_per_section + f
+    # Load and concatenate stock videos
+    stock_clips = []
+    for vf in video_files:
+        try:
+            clip = VideoFileClip(vf["file"])
+            # Resize to 1920x1080
+            clip = clip.resize((W, H))
+            stock_clips.append(clip)
+        except Exception as e:
+            print(f"  ⚠️ Error loading {vf['file']}: {e}")
+    
+    if stock_clips:
+        # Concatenate all stock videos
+        background = concatenate_videoclips(stock_clips, method="compose")
+        # Loop if too short
+        if background.duration < duration:
+            background = background.loop(duration=duration)
+        else:
+            background = background.subclip(0, duration)
+    else:
+        background = None
+else:
+    background = None
+
+# Generate frames with cartoon overlay
+frame_files = []
+frames_per_scene = total_frames // len(character_images)
+
+for scene_idx, char_data in enumerate(character_images):
+    print(f"  🎬 Scene {scene_idx+1}: {char_data['emotion']}")
+    
+    char_img = Image.open(char_data["path"]).convert("RGBA")
+    
+    for f in range(frames_per_scene):
+        frame_num = scene_idx * frames_per_scene + f
         if frame_num >= total_frames:
             break
+        
+        # If we have stock video background, extract frame
+        if background:
+            t = frame_num / fps
+            bg_frame = background.get_frame(t)
+            bg = Image.fromarray(bg_frame).convert("RGB")
+        else:
+            # Create animated gradient background
+            bg = Image.new('RGB', (W, H), (20, 20, 40))
+            draw = ImageDraw.Draw(bg)
             
-        anim_types = ["bounce", "slide", "pulse"]
-        anim = anim_types[sec_idx % 3]
+            progress = frame_num / total_frames
+            emotion_colors = {
+                "HAPPY": (40, 60, 40),
+                "SAD": (30, 40, 60),
+                "THINKING": (40, 50, 70),
+                "EXCITED": (60, 50, 40),
+                "PROUD": (50, 60, 40)
+            }
+            base = emotion_colors.get(char_data["emotion"], (40, 40, 60))
+            
+            for y in range(H):
+                r = int(base[0] * (0.5 + y/H * 0.5))
+                g = int(base[1] * (0.5 + y/H * 0.5))
+                b = int(base[2] * (0.5 + y/H * 0.5))
+                draw.line([(0, y), (W, y)], fill=(r, g, b))
         
-        frame = create_text_frame(section[:60], f"Tip {sec_idx + 1}" if sec_idx > 0 else selected_hook,
-                                  frame_num, total_frames, anim)
-        all_frames.append(frame)
+        # Character animation
+        bounce = int(15 * math.sin(f * 0.15))
+        char_size = 350
+        char_x = W - char_size - 100
+        char_y = H - char_size - 150 + bounce
         
-        if frame_num % 60 == 0:
-            print(f"  Frame {frame_num}/{total_frames}")
+        # Resize character
+        char_resized = char_img.resize((char_size, char_size), Image.Resampling.LANCZOS)
+        
+        # Paste character
+        bg.paste(char_resized, (char_x, char_y), char_resized)
+        
+        # Speech bubble
+        bubble_text = char_data["text"][:120]
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+            font_bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+        except:
+            font = ImageFont.load_default()
+            font_bold = font
+        
+        lines = textwrap.wrap(bubble_text, width=50)
+        line_h = 30
+        bubble_h = len(lines) * line_h + 40
+        bubble_w = min(900, max(len(l) * 15 for l in lines) + 60)
+        
+        bx = 100
+        by = 100
+        
+        # Bubble
+        draw = ImageDraw.Draw(bg)
+        draw.rounded_rectangle([bx, by, bx + bubble_w, by + bubble_h], 
+                              radius=20, fill=(255, 255, 255, 230), outline=(0, 0, 0), width=2)
+        
+        # Pointer to character
+        draw.polygon([(bx + bubble_w - 50, by + bubble_h), 
+                     (bx + bubble_w, by + bubble_h),
+                     (char_x + 50, char_y)], 
+                    fill=(255, 255, 255), outline=(0, 0, 0))
+        
+        # Text
+        ty = by + 20
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            tw = bbox[2] - bbox[0]
+            draw.text((bx + 20, ty), line, fill=(0, 0, 0), font=font)
+            ty += line_h
+        
+        # Progress bar
+        bar_width = int(W * 0.85 * (frame_num / total_frames))
+        draw.rectangle([W*0.075, H-15, W*0.925, H-10], fill=(80, 80, 80))
+        draw.rectangle([W*0.075, H-15, W*0.075 + bar_width, H-10], fill=(0, 255, 150))
+        
+        # Save
+        fname = f"frame_{frame_num:05d}.png"
+        bg.save(fname)
+        frame_files.append(fname)
+        
+        if f % 24 == 0:
+            print(f"    Frame {f}/{frames_per_scene}")
 
-print(f"✅ Generated {len(all_frames)} frames")
+print(f"✅ {len(frame_files)} frames generated")
 
-# ============ STEP 8: Create Video ============
-print("🎬 Creating video...")
+# ============ STEP 11: RENDER VIDEO ============
+print("🎬 Rendering...")
 
 try:
-    # Save frames
-    frame_files = []
-    for i, frame in enumerate(all_frames):
-        img = Image.fromarray(frame)
-        fname = f"frame_{i:05d}.png"
-        img.save(fname)
-        frame_files.append(fname)
-    
-    # Create video
     clip = ImageSequenceClip(frame_files, fps=fps)
+    audio = AudioFileClip("audio.mp3")
+    final = clip.set_audio(audio.subclip(0, duration))
     
-    # Subtitles
-    subtitle_clips = []
-    words = script.split()
-    words_per_seg = max(1, len(words) // 8)
-    
-    segments = []
-    current = []
-    for i, word in enumerate(words):
-        current.append(word)
-        if len(current) >= words_per_seg or i == len(words) - 1:
-            segments.append(" ".join(current))
-            current = []
-    
-    seg_duration = duration / max(len(segments), 1)
-    
-    for i, segment in enumerate(segments):
-        txt = TextClip(segment, fontsize=40, color='white', font='DejaVu-Sans',
-                       stroke_color='black', stroke_width=2, method='caption',
-                       size=(1600, None), align='center', bg_color='rgba(0,0,0,0.6)')
-        txt = txt.set_position(('center', 850))
-        txt = txt.set_start(i * seg_duration).set_duration(seg_duration)
-        txt = fadein(txt, 0.2).fadeout(0.2)
-        subtitle_clips.append(txt)
-    
-    # Intro
-    intro = TextClip(selected_topic, fontsize=80, color='yellow', font='DejaVu-Sans-Bold',
-                     stroke_color='red', stroke_width=3, method='caption',
-                     size=(1800, None), align='center')
-    intro = intro.set_position('center').set_duration(2)
-    intro = intro.fx(fadein, 0.5).fadeout(0.5)
-    
-    # Outro
-    outro = TextClip("Like, Share & Subscribe!", fontsize=70, color='white',
-                     font='DejaVu-Sans-Bold', stroke_color='blue', stroke_width=3,
-                     method='caption', size=(1600, None), align='center')
-    outro = outro.set_position('center').set_start(duration - 3).set_duration(3)
-    outro = fadein(outro, 0.5)
-    
-    # Composite
-    final = CompositeVideoClip([clip] + subtitle_clips + [intro, outro])
-    final = final.set_audio(audio.subclip(0, duration))
-    
-    # Write
     final.write_videofile("final_video.mp4", fps=fps, codec='libx264',
                           audio_codec='aac', temp_audiofile='temp-audio.m4a',
                           remove_temp=True, threads=4, preset='ultrafast', logger=None)
     
     print("✅ Video created!")
     
-    # Cleanup
     final.close()
     clip.close()
     audio.close()
     
+    # Cleanup
     for f in frame_files:
         if os.path.exists(f):
             os.remove(f)
-    print("🧹 Temp frames cleaned")
-    
+    for c in character_images:
+        if os.path.exists(c["path"]):
+            os.remove(c["path"])
+    for v in video_files:
+        if os.path.exists(v["file"]):
+            os.remove(v["file"])
+            
 except Exception as e:
-    print(f"❌ Video Error: {e}")
-    try:
-        audio = AudioFileClip("audio.mp3")
-        bg = ColorClip(size=(1920, 1080), color=(30, 30, 60)).set_duration(min(audio.duration, 180))
-        video = bg.set_audio(audio)
-        video.write_videofile("final_video.mp4", fps=24)
-        print("⚠️ Fallback video created")
-    except Exception as e2:
-        print(f"❌ Critical: {e2}")
-        sys.exit(1)
+    print(f"❌ Video error: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
-# ============ STEP 9: Upload to YouTube ============
-print("📤 Uploading to YouTube...")
+# ============ STEP 12: UPLOAD TO YOUTUBE ============
+print("📤 Uploading...")
+
 try:
     with open("token.pickle", "rb") as f:
         credentials = pickle.load(f)
     
     youtube = build("youtube", "v3", credentials=credentials)
     
-    base_tags = ["hindi", "education", "kids", "bachche", "parenting", "animated"]
-    cat_tags = {
-        "education": ["math", "learning", "study", "school", "tips"],
-        "parenting": ["motherhood", "childcare", "parenting tips", "baby"],
-        "technology": ["coding", "scratch", "ai", "future", "tech"],
-        "finance": ["money", "saving", "investment", "smart"],
-        "science": ["experiment", "diy", "science", "stem"],
-        "story": ["moral", "inspiration", "kahaniya", "story"]
-    }
-    
-    tags = base_tags + cat_tags.get(selected.get("category", "education"), [])
-    
-    sections_desc = [s[:50] for s in sections[:6] if s.strip()]
-    timestamps = ""
-    for i, sec in enumerate(sections_desc):
-        t = int(i * (duration / max(len(sections_desc), 1)))
-        timestamps += f"{t//60}:{t%60:02d} {sec}...\n"
+    clean_desc = clean_script[:800]
+    source = f"\n\n📚 Source: {wiki_data['url']}" if wiki_data else ""
     
     body = {
         "snippet": {
-            "title": f"🎬 {selected_topic} | Animated | बच्चों के लिए Best Tips",
-            "description": f"""{selected_hook}
+            "title": f"🎬 {selected_topic} | Real Story | Animated Cartoon for Kids",
+            "description": f"""🎨 AI-Generated Cartoon Animation with Real Stock Footage!
 
-🎥 {selected_topic} - Fully Animated Video!
-
-📌 Topics:
-{chr(10).join([f"• {s[:60]}" for s in sections_desc])}
-
-⏱️ Timestamps:
-{timestamps}
+{clean_desc}...
 
 ✨ Features:
-• Animated backgrounds
-• Moving text effects
-• Professional transitions
-• Hindi subtitles
+• Real Stock Videos (Pexels)
+• Animated Cartoon Characters
+• Emotional Expressions
+• Hindi Storytelling
+• Wikipedia Facts
 
-👨‍👩‍👧‍👦 Subscribe for more!
+{source}
 
-#Hindi #Education #Kids #Animated #Parenting""",
-            "tags": tags[:15],
+👨‍👩‍👧‍👦 Subscribe for daily animated stories!
+
+#CartoonStory #HindiAnimation #KidsStory #RealVideo #Educational""",
+            "tags": ["cartoon", "animation", "hindi story", "kids", "real footage", 
+                    "stock video", "educational", "animated", "children", "inspiration"],
             "categoryId": "27"
         },
         "status": {
@@ -447,13 +598,12 @@ try:
     print(f"✅ Uploaded! https://youtube.com/watch?v={vid}")
     
 except Exception as e:
-    print(f"❌ Upload Error: {e}")
-    sys.exit(1)
+    print(f"❌ Upload error: {e}")
 
-# ============ STEP 10: Cleanup ============
-print("🧹 Cleaning up...")
+# Cleanup
 for f in ["audio.mp3", "client_secret.json", "token.pickle", "temp-audio.m4a"]:
     if os.path.exists(f):
         os.remove(f)
 
-print(f"\n🎉 DONE! https://youtube.com/watch?v={vid}")
+print(f"\n🎉 DONE! {duration/60:.1f} min video uploaded!")
+print(f"🔗 https://youtube.com/watch?v={vid}")
