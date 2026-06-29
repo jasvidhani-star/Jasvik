@@ -1,0 +1,19 @@
+name: Run YouTube Automation
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+# यहाँ जोड़ें यह परमिशन्स ब्लॉक:
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      # ... बाकी आपका स्टेप्स का कोड ...
