@@ -8,17 +8,20 @@ import math
 
 # ============ STEP 1: Setup & Imports ============
 try:
-    import google.generativeai as genai
+    # ✅ NEW API: google-genai (NOT google.generativeai)
+    from google import genai
+    from google.genai import types
     from gtts import gTTS
     from moviepy.editor import (ImageClip, AudioFileClip, CompositeVideoClip, 
-                                TextClip, ColorClip, concatenate_videoclips)
+                                TextClip, ColorClip, concatenate_videoclips,
+                                ImageSequenceClip)
     from moviepy.video.fx.all import fadein, fadeout
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
-    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+    from PIL import Image, ImageDraw, ImageFont
     import numpy as np
 except ImportError as e:
-    print(f"Missing dependency: {e}")
+    print(f"❌ Missing dependency: {e}")
     sys.exit(1)
 
 # ============ STEP 2: Setup Secrets ============
@@ -107,11 +110,12 @@ print(f"🎯 Topic: {selected_topic}")
 print(f"🎣 Hook: {selected_hook}")
 print(f"⏱️ Duration: {target_duration}s")
 
-# ============ STEP 4: Generate Script ============
-print("🤖 Generating script...")
+# ============ STEP 4: Generate Script with NEW Gemini API ============
+print("🤖 Generating script with Gemini...")
+
 try:
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # ✅ NEW API: google-genai
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
     
     prompt = f"""YouTube Video (2-3 minutes) के लिए स्क्रिप्ट लिखो।
 
@@ -127,12 +131,16 @@ HOOK: {selected_hook}
 - सिर्फ Hindi text, no emojis
 - Output: सिर्फ स्क्रिप्ट"""
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=prompt
+    )
     script = response.text.strip()
     print(f"✅ Script: {len(script.split())} words")
+    
 except Exception as e:
-    print(f"❌ Error: {e}")
-    script = f"{selected_hook}\n\n{selected_topic} के बारे में जानें। पहला तरीका: रोज़ाना अभ्यास। दूसरा: खेल-खेल में सीखना। तीसरा: प्रशंसा और प्रोत्साहन। चौथा: सही माहौल। पांचवां: धैर्य रखें। Like, Share, Subscribe!"
+    print(f"❌ Gemini Error: {e}")
+    script = f"{selected_hook}\n\n{selected_topic} के बारे में जानें। पहला: रोज़ाना अभ्यास। दूसरा: खेल-खेल में सीखना। तीसरा: प्रशंसा। चौथा: सही माहौल। पांचवां: धैर्य। Like, Share, Subscribe!"
     print("⚠️ Using fallback")
 
 # ============ STEP 5: Create Audio ============
@@ -142,24 +150,20 @@ try:
     tts.save("audio.mp3")
     print("✅ Audio saved")
 except Exception as e:
-    print(f"❌ Error: {e}")
+    print(f"❌ Audio Error: {e}")
     sys.exit(1)
 
-# ============ STEP 6: ANIMATED BACKGROUND FRAMES ============
+# ============ STEP 6: ANIMATED BACKGROUND ============
 print("🎨 Creating animated backgrounds...")
 
-W, H = 1920, 1080  # 16:9
+W, H = 1920, 1080
 
 def create_animated_bg(frame_num, total_frames, color_scheme="blue"):
-    """Create animated background with moving particles"""
     img = Image.new('RGB', (W, H), color=(10, 10, 30))
     draw = ImageDraw.Draw(img)
-    
-    # Animated gradient
     progress = frame_num / total_frames
-    offset = int(progress * 200)
     
-    # Moving gradient circles
+    # Moving circles
     for i in range(5):
         cx = int(W * 0.2 + (W * 0.6) * math.sin(progress * 2 * math.pi + i * 0.8))
         cy = int(H * 0.3 + (H * 0.4) * math.cos(progress * 2 * math.pi + i * 0.6))
@@ -176,24 +180,21 @@ def create_animated_bg(frame_num, total_frames, color_scheme="blue"):
     
     # Floating particles
     for i in range(30):
-        px = int((W * (i / 30) + offset * 2) % W)
-        py = int((H * 0.1 * (i % 7) + offset) % H)
+        px = int((W * (i / 30) + frame_num * 2) % W)
+        py = int((H * 0.1 * (i % 7) + frame_num) % H)
         size = 3 + (i % 4)
         brightness = 150 + int(100 * math.sin(progress * 10 + i))
-        draw.ellipse([px, py, px+size, py+size], 
-                    fill=(brightness, brightness, 200))
+        draw.ellipse([px, py, px+size, py+size], fill=(brightness, brightness, 200))
     
-    # Animated lines
+    # Wave lines
     for i in range(8):
         y = int(H * 0.1 + (H * 0.8) * (i / 8))
         wave = int(50 * math.sin(progress * 4 + i * 0.5))
-        draw.line([(0, y + wave), (W, y - wave)], 
-                 fill=(40, 60, 100), width=2)
+        draw.line([(0, y + wave), (W, y - wave)], fill=(40, 60, 100), width=2)
     
     return np.array(img)
 
 def create_text_frame(text, subtext="", frame_num=0, total_frames=1, anim_type="bounce"):
-    """Create frame with animated text"""
     base = create_animated_bg(frame_num, total_frames)
     img = Image.fromarray(base)
     draw = ImageDraw.Draw(img)
@@ -201,13 +202,11 @@ def create_text_frame(text, subtext="", frame_num=0, total_frames=1, anim_type="
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 65)
         sub_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 38)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
     except:
         title_font = ImageFont.load_default()
         sub_font = ImageFont.load_default()
-        small_font = ImageFont.load_default()
     
-    # Text animation offset
+    # Text animation
     if anim_type == "bounce":
         bounce = int(15 * abs(math.sin(frame_num * 0.3)))
         y_offset = 280 + bounce
@@ -217,76 +216,64 @@ def create_text_frame(text, subtext="", frame_num=0, total_frames=1, anim_type="
     else:
         y_offset = 280
     
-    # Glow effect for title
+    # Title with glow
     lines = textwrap.wrap(text, width=28)
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=title_font)
         tw = bbox[2] - bbox[0]
         x = (W - tw) // 2
         
-        # Multiple glow layers
         for glow in range(5, 0, -1):
             alpha = int(50 / glow)
-            draw.text((x, y_offset), line, 
-                     fill=(alpha, alpha, 150 + alpha), font=title_font)
-        # Main text
+            draw.text((x, y_offset), line, fill=(alpha, alpha, 150 + alpha), font=title_font)
         draw.text((x, y_offset), line, fill=(255, 255, 255), font=title_font)
         y_offset += 85
     
-    # Subtext with pulse
+    # Subtext
     if subtext:
-        pulse = int(255 * (0.7 + 0.3 * math.sin(frame_num * 0.2)))
         sub_lines = textwrap.wrap(subtext, width=40)
         y_offset = 520
         for line in sub_lines:
             bbox = draw.textbbox((0, 0), line, font=sub_font)
             tw = bbox[2] - bbox[0]
             x = (W - tw) // 2
-            draw.text((x, y_offset), line, 
-                     fill=(255, 215, 0), font=sub_font)
+            draw.text((x, y_offset), line, fill=(255, 215, 0), font=sub_font)
             y_offset += 50
     
-    # Animated progress bar at bottom
+    # Progress bar
     bar_width = int(W * 0.8 * (frame_num / total_frames))
-    draw.rectangle([W*0.1, H-30, W*0.9, H-20], 
-                  outline=(100, 100, 150), width=2)
-    draw.rectangle([W*0.1, H-30, W*0.1 + bar_width, H-20], 
-                  fill=(0, 200, 255))
+    draw.rectangle([W*0.1, H-30, W*0.9, H-20], outline=(100, 100, 150), width=2)
+    draw.rectangle([W*0.1, H-30, W*0.1 + bar_width, H-20], fill=(0, 200, 255))
     
     # Corner decorations
     size = 20 + int(10 * math.sin(frame_num * 0.15))
-    draw.polygon([(50, 50), (50+size, 50), (50, 50+size)], 
-                fill=(0, 255, 200))
-    draw.polygon([(W-50, 50), (W-50-size, 50), (W-50, 50+size)], 
-                fill=(0, 255, 200))
-    draw.polygon([(50, H-50), (50+size, H-50), (50, H-50-size)], 
-                fill=(255, 100, 100))
-    draw.polygon([(W-50, H-50), (W-50-size, H-50), (W-50, H-50-size)], 
-                fill=(255, 100, 100))
+    draw.polygon([(50, 50), (50+size, 50), (50, 50+size)], fill=(0, 255, 200))
+    draw.polygon([(W-50, 50), (W-50-size, 50), (W-50, 50+size)], fill=(0, 255, 200))
+    draw.polygon([(50, H-50), (50+size, H-50), (50, H-50-size)], fill=(255, 100, 100))
+    draw.polygon([(W-50, H-50), (W-50-size, H-50), (W-50, H-50-size)], fill=(255, 100, 100))
     
     return np.array(img)
 
-# ============ STEP 7: Generate Animated Video Frames ============
+# ============ STEP 7: Generate Video Frames ============
 print("🎬 Generating animated video...")
 
-fps = 30
+fps = 24
 audio = AudioFileClip("audio.mp3")
 duration = min(audio.duration, target_duration)
 total_frames = int(duration * fps)
 
-# Split script into sections
 sections = [s.strip() for s in script.split('\n') if s.strip() and len(s.strip()) > 10]
 if len(sections) < 3:
     sections = [selected_topic, selected_hook] + sections
 
-# Calculate frames per section
 frames_per_section = total_frames // max(len(sections), 1)
 
-# Generate frames for each section
 all_frames = []
-color_schemes = ["blue", "purple", "green", "blue", "purple"]
+color_schemes = ["blue", "purple", "green", "blue", "purple", "green"]
 
-for sec_idx, section in enumerate(sections[:6]):  # Max 6 sections
+print(f"Generating {total_frames} frames...")
+
+for sec_idx, section in enumerate(sections[:6]):
     scheme = color_schemes[sec_idx % len(color_schemes)]
     
     for f in range(frames_per_section):
@@ -294,30 +281,23 @@ for sec_idx, section in enumerate(sections[:6]):  # Max 6 sections
         if frame_num >= total_frames:
             break
             
-        # Pick animation type
         anim_types = ["bounce", "slide", "pulse"]
         anim = anim_types[sec_idx % 3]
         
-        # Create frame
-        frame = create_text_frame(
-            section[:60],  # Truncate for display
-            f"Tip {sec_idx + 1}" if sec_idx > 0 else selected_hook,
-            frame_num,
-            total_frames,
-            anim
-        )
+        frame = create_text_frame(section[:60], f"Tip {sec_idx + 1}" if sec_idx > 0 else selected_hook,
+                                  frame_num, total_frames, anim)
         all_frames.append(frame)
         
-        if frame_num % 30 == 0:
-            print(f"  Frame {frame_num}/{total_frames} generated...")
+        if frame_num % 60 == 0:
+            print(f"  Frame {frame_num}/{total_frames}")
 
-print(f"✅ Generated {len(all_frames)} animated frames")
+print(f"✅ Generated {len(all_frames)} frames")
 
-# ============ STEP 8: Create Video from Frames ============
-print("🎬 Creating video from frames...")
+# ============ STEP 8: Create Video ============
+print("🎬 Creating video...")
 
 try:
-    # Save frames as temporary images (MoviePy needs file paths)
+    # Save frames
     frame_files = []
     for i, frame in enumerate(all_frames):
         img = Image.fromarray(frame)
@@ -325,15 +305,13 @@ try:
         img.save(fname)
         frame_files.append(fname)
     
-    # Create ImageSequenceClip
-    from moviepy.editor import ImageSequenceClip
-    
+    # Create video
     clip = ImageSequenceClip(frame_files, fps=fps)
     
-    # Add animated subtitles overlay
+    # Subtitles
     subtitle_clips = []
     words = script.split()
-    words_per_seg = max(1, len(words) // 10)
+    words_per_seg = max(1, len(words) // 8)
     
     segments = []
     current = []
@@ -346,89 +324,51 @@ try:
     seg_duration = duration / max(len(segments), 1)
     
     for i, segment in enumerate(segments):
-        # Animated subtitle with typewriter effect
-        txt = TextClip(
-            segment,
-            fontsize=42,
-            color='white',
-            font='DejaVu-Sans',
-            stroke_color='black',
-            stroke_width=2,
-            method='caption',
-            size=(1600, None),
-            align='center',
-            bg_color='rgba(0,0,0,0.6)'
-        )
-        
-        # Position at bottom with slight bounce
+        txt = TextClip(segment, fontsize=40, color='white', font='DejaVu-Sans',
+                       stroke_color='black', stroke_width=2, method='caption',
+                       size=(1600, None), align='center', bg_color='rgba(0,0,0,0.6)')
         txt = txt.set_position(('center', 850))
         txt = txt.set_start(i * seg_duration).set_duration(seg_duration)
         txt = fadein(txt, 0.2).fadeout(0.2)
         subtitle_clips.append(txt)
     
-    # Add intro animation
-    intro_text = TextClip(
-        selected_topic,
-        fontsize=80,
-        color='yellow',
-        font='DejaVu-Sans-Bold',
-        stroke_color='red',
-        stroke_width=3,
-        method='caption',
-        size=(1800, None),
-        align='center'
-    )
-    intro_text = intro_text.set_position('center').set_duration(2)
-    intro_text = intro_text.fx(fadein, 0.5).fadeout(0.5)
+    # Intro
+    intro = TextClip(selected_topic, fontsize=80, color='yellow', font='DejaVu-Sans-Bold',
+                     stroke_color='red', stroke_width=3, method='caption',
+                     size=(1800, None), align='center')
+    intro = intro.set_position('center').set_duration(2)
+    intro = intro.fx(fadein, 0.5).fadeout(0.5)
     
-    # Add outro animation
-    outro_text = TextClip(
-        "Like, Share & Subscribe! 🔔",
-        fontsize=70,
-        color='white',
-        font='DejaVu-Sans-Bold',
-        stroke_color='blue',
-        stroke_width=3,
-        method='caption',
-        size=(1600, None),
-        align='center'
-    )
-    outro_text = outro_text.set_position('center').set_start(duration - 3).set_duration(3)
-    outro_text = fadein(outro_text, 0.5)
+    # Outro
+    outro = TextClip("Like, Share & Subscribe!", fontsize=70, color='white',
+                     font='DejaVu-Sans-Bold', stroke_color='blue', stroke_width=3,
+                     method='caption', size=(1600, None), align='center')
+    outro = outro.set_position('center').set_start(duration - 3).set_duration(3)
+    outro = fadein(outro, 0.5)
     
-    # Composite everything
-    final = CompositeVideoClip([clip] + subtitle_clips + [intro_text, outro_text])
+    # Composite
+    final = CompositeVideoClip([clip] + subtitle_clips + [intro, outro])
     final = final.set_audio(audio.subclip(0, duration))
     
-    # Write final video
-    final.write_videofile(
-        "final_video.mp4",
-        fps=fps,
-        codec='libx264',
-        audio_codec='aac',
-        temp_audiofile='temp-audio.m4a',
-        remove_temp=True,
-        threads=4,
-        preset='ultrafast',
-        logger=None
-    )
+    # Write
+    final.write_videofile("final_video.mp4", fps=fps, codec='libx264',
+                          audio_codec='aac', temp_audiofile='temp-audio.m4a',
+                          remove_temp=True, threads=4, preset='ultrafast', logger=None)
     
-    print("✅ Animated video created!")
+    print("✅ Video created!")
     
     # Cleanup
     final.close()
     clip.close()
     audio.close()
     
-    # Remove temp frames
     for f in frame_files:
         if os.path.exists(f):
             os.remove(f)
     print("🧹 Temp frames cleaned")
     
 except Exception as e:
-    print(f"❌ Error: {e}")
-    # Fallback
+    print(f"❌ Video Error: {e}")
     try:
         audio = AudioFileClip("audio.mp3")
         bg = ColorClip(size=(1920, 1080), color=(30, 30, 60)).set_duration(min(audio.duration, 180))
@@ -447,7 +387,7 @@ try:
     
     youtube = build("youtube", "v3", credentials=credentials)
     
-    base_tags = ["hindi", "education", "kids", "bachche", "parenting", "animated", "hindi video"]
+    base_tags = ["hindi", "education", "kids", "bachche", "parenting", "animated"]
     cat_tags = {
         "education": ["math", "learning", "study", "school", "tips"],
         "parenting": ["motherhood", "childcare", "parenting tips", "baby"],
@@ -459,22 +399,21 @@ try:
     
     tags = base_tags + cat_tags.get(selected.get("category", "education"), [])
     
-    # Create timestamps
-    sections_for_desc = [s[:50] for s in sections[:6] if s.strip()]
+    sections_desc = [s[:50] for s in sections[:6] if s.strip()]
     timestamps = ""
-    for i, sec in enumerate(sections_for_desc):
-        t = int(i * (duration / max(len(sections_for_desc), 1)))
+    for i, sec in enumerate(sections_desc):
+        t = int(i * (duration / max(len(sections_desc), 1)))
         timestamps += f"{t//60}:{t%60:02d} {sec}...\n"
     
     body = {
         "snippet": {
-            "title": f"🎬 {selected_topic} | Animated | बच्चों के लिए Best Tips 2026",
+            "title": f"🎬 {selected_topic} | Animated | बच्चों के लिए Best Tips",
             "description": f"""{selected_hook}
 
 🎥 {selected_topic} - Fully Animated Video!
 
-📌 Topics Covered:
-{chr(10).join([f"• {s[:60]}" for s in sections_for_desc])}
+📌 Topics:
+{chr(10).join([f"• {s[:60]}" for s in sections_desc])}
 
 ⏱️ Timestamps:
 {timestamps}
@@ -485,9 +424,9 @@ try:
 • Professional transitions
 • Hindi subtitles
 
-👨‍👩‍👧‍👦 Subscribe for more animated educational content!
+👨‍👩‍👧‍👦 Subscribe for more!
 
-#Hindi #Education #Kids #Animated #Parenting #Bachche #Learning""",
+#Hindi #Education #Kids #Animated #Parenting""",
             "tags": tags[:15],
             "categoryId": "27"
         },
@@ -508,15 +447,13 @@ try:
     print(f"✅ Uploaded! https://youtube.com/watch?v={vid}")
     
 except Exception as e:
-    print(f"❌ Upload error: {e}")
+    print(f"❌ Upload Error: {e}")
     sys.exit(1)
 
-# ============ STEP 10: Final Cleanup ============
+# ============ STEP 10: Cleanup ============
 print("🧹 Cleaning up...")
-for f in ["audio.mp3", "client_secret.json", "token.pickle"]:
+for f in ["audio.mp3", "client_secret.json", "token.pickle", "temp-audio.m4a"]:
     if os.path.exists(f):
         os.remove(f)
-print("✅ Done!")
 
-print(f"\n🎉 Animated Video Uploaded!")
-print(f"🔗 https://youtube.com/watch?v={vid}")
+print(f"\n🎉 DONE! https://youtube.com/watch?v={vid}")
