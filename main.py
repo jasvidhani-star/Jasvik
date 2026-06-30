@@ -1,7 +1,5 @@
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 Trending Song Lyrics Video Generator
-Full Pipeline: Detection → Lyrics → Audio → Video → Upload → Analytics
+Full Pipeline: Detection -> Lyrics -> Audio -> Video -> Upload -> Analytics
 """
 
 import os
@@ -16,434 +14,407 @@ import re
 import time
 import subprocess
 import shutil
+import asyncio
 from datetime import datetime
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
 
 import requests
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # ============ CONFIGURATION ============
 CONFIG = {
     "PEXELS_API_KEY": os.environ.get("PEXELS_API_KEY", ""),
-    "GENIUS_API_KEY": os.environ.get("GENIUS_API_KEY", ""),
     "YOUTUBE_CLIENT_SECRET": os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
     "YOUTUBE_TOKEN_PICKLE_BASE64": os.environ.get("YOUTUBE_TOKEN_PICKLE_BASE64", ""),
-    "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
-    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-    "SPOTIFY_CLIENT_ID": os.environ.get("SPOTIFY_CLIENT_ID", ""),
-    "SPOTIFY_CLIENT_SECRET": os.environ.get("SPOTIFY_CLIENT_SECRET", ""),
     "OUTPUT_DIR": "output",
     "TEMP_DIR": "temp",
     "FPS": 30,
     "WIDTH": 1920,
     "HEIGHT": 1080,
+    "SHORTS_WIDTH": 1080,
+    "SHORTS_HEIGHT": 1920,
 }
 
-# Ensure directories exist
 Path(CONFIG["OUTPUT_DIR"]).mkdir(exist_ok=True)
 Path(CONFIG["TEMP_DIR"]).mkdir(exist_ok=True)
 
-# ============ STEP 1: TRENDING SONG DETECTION ============
-class TrendingDetector:
-    """Detect trending songs from multiple sources"""
-    
-    SPOTIFY_TRENDING = [
-        {"title": "Tum Hi Ho", "artist": "Arijit Singh", "lang": "hindi", "mood": "romantic", "trend_score": 95},
-        {"title": "Kesariya", "artist": "Arijit Singh", "lang": "hindi", "mood": "romantic", "trend_score": 92},
-        {"title": "Chaiyya Chaiyya", "artist": "AR Rahman", "lang": "hindi", "mood": "energetic", "trend_score": 88},
-        {"title": "Malhari", "artist": "Vishal Dadlani", "lang": "hindi", "mood": "energetic", "trend_score": 85},
-        {"title": "Ghoomar", "artist": "Shreya Ghoshal", "lang": "hindi", "mood": "traditional", "trend_score": 82},
-        {"title": "Dilbar", "artist": "Neha Kakkar", "lang": "hindi", "mood": "party", "trend_score": 90},
-        {"title": "Aankh Marey", "artist": "Neha Kakkar", "lang": "hindi", "mood": "party", "trend_score": 87},
-        {"title": "Vaaste", "artist": "Dhvani Bhanushali", "lang": "hindi", "mood": "romantic", "trend_score": 89},
-        {"title": "Lut Gaye", "artist": "Jubin Nautiyal", "lang": "hindi", "mood": "romantic", "trend_score": 91},
-        {"title": "Raataan Lambiyan", "artist": "Jubin Nautiyal", "lang": "hindi", "mood": "romantic", "trend_score": 93},
-        {"title": "Lahore", "artist": "Guru Randhawa", "lang": "punjabi", "mood": "party", "trend_score": 86},
-        {"title": "High Rated Gabru", "artist": "Guru Randhawa", "lang": "punjabi", "mood": "party", "trend_score": 84},
-        {"title": "52 Gaj Ka Daman", "artist": "Renuka Panwar", "lang": "haryanvi", "mood": "traditional", "trend_score": 88},
-        {"title": "Teri Aakhya Ka Yo Kajal", "artist": "Sapna Choudhary", "lang": "haryanvi", "mood": "traditional", "trend_score": 85},
-        {"title": "Lollipop Lagelu", "artist": "Pawan Singh", "lang": "bhojpuri", "mood": "party", "trend_score": 83},
-        {"title": "Kamariya", "artist": "Dinesh Lal", "lang": "bhojpuri", "mood": "party", "trend_score": 81},
-        {"title": "Bom Diggy", "artist": "Zack Knight", "lang": "punjabi", "mood": "party", "trend_score": 80},
-        {"title": "Naah", "artist": "Jassi Gill", "lang": "punjabi", "mood": "party", "trend_score": 82},
-        {"title": "Bawli Tared", "artist": "Sumit Goswami", "lang": "haryanvi", "mood": "energetic", "trend_score": 79},
-        {"title": "Kala Chashma", "artist": "Amar Arshi", "lang": "punjabi", "mood": "party", "trend_score": 94},
-    ]
-    
+# ============ HINDI KIDS STORIES DATABASE ============
+STORIES = [
+    {
+        "title": "Chaalak Khargosh aur Dheemi Kachhua",
+        "title_en": "The Clever Rabbit and Slow Tortoise",
+        "moral": "Dheere aur sthir jeetate hain",
+        "category": "moral",
+        "characters": ["Khargosh", "Kachhua"],
+        "color_theme": "forest",
+        "content": """Ek samay ki baat hai, ek ghane jangal mein ek chaalak khargosh rehta tha. Vah bahut tez daud sakta tha aur hamesha apni gati par garv karta tha.
+
+Usi jangal mein ek dheemi kachhua bhi rehta tha. Kachhua har kaam dheere-dheere karta tha.
+
+Ek din khargosh ne kachhue se kaha, "Are kachhue, tum to bahut dheere ho! Kya tum kabhi daud sakte ho?"
+
+Kachhua muskuraya aur bola, "Haan, main dheera hoon lekin main sthir hoon. Chalo, ek daud lagate hain."
+
+Khargosh hansa aur kaha, "Theek hai! Kaun pehle us pahadi tak pahunchega, vahi jeetega."
+
+Daud shuru hui. Khargosh tezi se aage nikal gaya. Thodi door jaakar usne peeche dekha, kachhua kahi dikhai nahi diya.
+
+Khargosh socha, "Kachhua to bahut peeche hai. Main thoda aaram kar leta hoon."
+
+Khargosh ek ped ke neeche so gaya.
+
+Kachhua dheere-dheere chalta raha. Usne khargosh ko sote hue dekha lekin ruka nahi.
+
+Kachhua lagataar chalta raha aur ant mein pahadi tak pahunch gaya.
+
+Jab khargosh ki aankh khuli, to vah jaldi se utha aur dauda. Lekin jab vah pahuncha, kachhua pehle se hi vahan tha.
+
+Khargosh ne kaha, "Main haar gaya! Tum jeete kachhue."
+
+Kachhua bola, "Dheere aur sthir jeetate hain. Gati nahi, dridhta mayne rakhti hai."
+
+Sab janwaron ne kachhue ki jeet ka jashn manaya. Khargosh ne apni ghamand chhod di.
+
+Tabhi se kahawat bani: Dheere-dheere re mana, dheere sab kuchh hoe."""
+    },
+    {
+        "title": "Laalchi Kauva aur Jutha Roti",
+        "title_en": "The Greedy Crow and the Stale Bread",
+        "moral": "Laalach buri bala hai",
+        "category": "moral",
+        "characters": ["Kauva", "Lomdi"],
+        "color_theme": "village",
+        "content": """Ek gaon mein ek kauva rehta tha. Vah bahut laalchi tha. Hamesha aur se adhik khana chahta tha.
+
+Ek din use ek roti mili. Roti thodi jutthi thi lekin kaue ko bahut pasand aayi.
+
+Vah socha, "Main ise kisi ko nahi doonga. Main akele khaunga."
+
+Kaue ne roti apni chonch mein dabai aur ek ped ki dali par baith gaya.
+
+Tabhi ek chaalak lomdi vahan se guzri. Usne kaue ko roti dekhi.
+
+Lomdi ne socha, "Mujhe yah roti chahiye."
+
+Lomdi ne kaue se kaha, "He kaue bhai, tumhari aawaz bahut surili hai. Kya tum ek geet suna sakte ho?"
+
+Kauva khush ho gaya. Usne socha, "Lomdi meri tarif kar rahi hai. Main gata hoon."
+
+Jaise hi kaue ne munh khola, roti neeche gir gayi.
+
+Lomdi ne turant roti uthai aur bhaag gayi.
+
+Kauva rone laga. Use apni laalach par pachhtava hua.
+
+Ek panchhi ne kaha, "Laalach buri bala hai. Jo aapke paas hai, usme santosh karo."
+
+Kaue ne seekh li: Kabhi bhi laalchi mat bano."""
+    },
+    {
+        "title": "Bahadur Chooha aur Sher",
+        "title_en": "The Brave Mouse and the Lion",
+        "moral": "Koi bhi chhota nahi hota",
+        "category": "courage",
+        "characters": ["Chooha", "Sher"],
+        "color_theme": "jungle",
+        "content": """Ek vishal jangal mein ek sher rehta tha. Vah jangal ka raja tha. Sabhi janwar usse darte the.
+
+Ek din sher so raha tha. Ek chhota chooha vahan se guzra.
+
+Choohe ne dekha ki sher so raha hai. Vah dara hua tha lekin sher ke paas se jana zaroori tha.
+
+Chooha dheere-dheere chal raha tha. Achank uska pair sher ki poonchh par pad gaya.
+
+Sher jaag gaya. Usne choohe ko dekha aur gusse mein dahada.
+
+"Tumne mujhe jagaya! Ab main tumhe kha jaunga!" sher bola.
+
+Chooha kaanpata hua bola, "He maharaj, kripya mujhe maaf kar do. Maine jaanbujhkar nahi kiya."
+
+Sher hansa, "Tum jaise chhote choohe se mujhe kya madad milegi?"
+
+Chooha bola, "Maharaj, chhota ho ya bada, har koi kisi na kisi kaam aa sakta hai."
+
+Sher muskuraya aur choohe ko chhod diya.
+
+Kuchh dino baad, sher ek jaal mein phans gaya. Vah bahut dahada lekin koi nahi aaya.
+
+Chooha vahan se guzra. Usne sher ko jaal mein phansa dekha.
+
+Choohe ne turant jaal kaatna shuru kiya. Dheere-dheere usne jaal kaat diya.
+
+Sher azaad ho gaya. Usne choohe ko gale lagaya.
+
+Sher bola, "Tumne meri jaan bachai. Tum sach mein bahadur ho."
+
+Chooha muskuraya, "Maine kaha tha na, koi bhi chhota nahi hota."
+
+Tabhi se sab janwar ek-doosre ka samman karne lage."""
+    },
+    {
+        "title": "Mehnati Chinti aur Aalasi Tidda",
+        "title_en": "The Hardworking Ant and Lazy Grasshopper",
+        "moral": "Mehnat ka fal meetha hota hai",
+        "category": "moral",
+        "characters": ["Chinti", "Tidda"],
+        "color_theme": "meadow",
+        "content": """Ek sundar maidan mein ek chinti ka parivar rehta tha. Ve sab bahut mehnati the.
+
+Garmiyon mein jab dhoop chamakti thi, chintiyan khane ka sangrah karti thin.
+
+Usi maidan mein ek tidda rehta tha. Vah bahut aalasi tha. Sara din gata aur nachata rehta.
+
+Chintiyon ne tidde se kaha, "Bhai, garmi mein khana ikattha kar lo. Sardi mein bhookh lagegi."
+
+Tidda hansa, "Abhi to bahut samay hai. Main baad mein kar loonga."
+
+Chintiyan din-raat mehnat karti rahin. Unhone bahut sara anaaj ikattha kiya.
+
+Tidda har roz gata, "Chhoti-chhoti chintiyan, kaam mein lagi rahati hain."
+
+Jaise hi barish ka mausam aaya, sab kuchh bheeg gaya. Phir sardi aayi.
+
+Maidan mein sab kuchh sookh gaya. Koi patta, koi dana nahi bacha.
+
+Tidda bhookha tha. Usne chintiyon ke ghar jaakar dekha, vahan anaaj bhara pada tha.
+
+Tidda sharminda hokar bola, "Mujhe maaf kar do. Maine tumhari baat nahi mani."
+
+Chintiyon ne daya dikhayi. Unhone tidde ko khana diya.
+
+Tidda ne kaha, "Maine seekh liya. Mehnat ka fal meetha hota hai."
+
+Tabhi se tidda bhi mehnati ban gaya."""
+    },
+    {
+        "title": "Chamakdaar Taare aur Andhera Aakaash",
+        "title_en": "The Shining Stars and the Dark Sky",
+        "moral": "Har andhere ke baad ujaala aata hai",
+        "category": "inspirational",
+        "characters": ["Chhota Taara", "Chaand"],
+        "color_theme": "night",
+        "content": """Aakaash mein hazaaron taare rehte the. Ve raat ko chamakate aur sabko roshni dete.
+
+Ek chhota taara tha jo bahut kamzor tha. Uski roshni bahut dhimi thi.
+
+Chhote taare ne chaand se poocha, "Main kyon itna kamzor hoon?"
+
+Chaand muskuraya, "Tum abhi chhote ho. Samay ke saath tum bhi chamakoge."
+
+Ek raat bahut baadal aa gaye. Sab taare baadalon ke peeche chhip gaye.
+
+Andhera ho gaya. Dharti par sab dar gaye.
+
+Chhote taare ne socha, "Mujhe kuchh karna hoga."
+
+Chhote taare ne apni saari taakat lagai. Dheere-dheere vah chamakne laga.
+
+Uski roshni baadalon se hokar dharti tak pahunchi.
+
+Logon ne dekha, "Wah! Ek taara chamak raha hai!"
+
+Chhote taare ki roshni se doosaron taaron ko bhi himmat mili. Ve bhi chamakne lage.
+
+Baadal hat gaye. Poora aakaash chamak utha.
+
+Chaand ne kaha, "Dekha? Har andhere ke baad ujaala aata hai."
+
+Chhota taara khush ho gaya. Usne seekha ki kabhi haar nahi manani chahiye.
+
+Tabhi se vah sabse chamakdaar taara ban gaya."""
+    }
+]
+
+# ============ COLOR THEMES FOR STORIES ============
+COLOR_THEMES = {
+    "forest": {
+        "bg": [(20, 60, 20), (10, 40, 10)],
+        "accent": (100, 255, 100),
+        "glow": (50, 255, 50),
+        "text": (255, 255, 220),
+        "highlight": (255, 255, 150),
+        "particle_colors": [(100, 255, 100), (50, 200, 50), (150, 255, 150)],
+    },
+    "village": {
+        "bg": [(60, 40, 20), (40, 25, 10)],
+        "accent": (255, 200, 100),
+        "glow": (255, 150, 50),
+        "text": (255, 240, 200),
+        "highlight": (255, 220, 150),
+        "particle_colors": [(255, 200, 100), (200, 150, 50), (255, 180, 80)],
+    },
+    "jungle": {
+        "bg": [(10, 50, 20), (5, 35, 15)],
+        "accent": (255, 180, 50),
+        "glow": (255, 150, 0),
+        "text": (255, 250, 200),
+        "highlight": (255, 220, 100),
+        "particle_colors": [(255, 200, 50), (200, 150, 30), (255, 180, 60)],
+    },
+    "meadow": {
+        "bg": [(40, 60, 20), (25, 45, 10)],
+        "accent": (200, 255, 100),
+        "glow": (150, 255, 50),
+        "text": (240, 255, 220),
+        "highlight": (220, 255, 150),
+        "particle_colors": [(200, 255, 100), (150, 220, 50), (180, 255, 80)],
+    },
+    "night": {
+        "bg": [(10, 10, 40), (5, 5, 25)],
+        "accent": (150, 200, 255),
+        "glow": (100, 150, 255),
+        "text": (220, 230, 255),
+        "highlight": (180, 200, 255),
+        "particle_colors": [(150, 200, 255), (100, 150, 255), (200, 220, 255)],
+    },
+}
+
+# ============ STEP 1: STORY SELECTION ============
+class StorySelector:
+    """Select a story from the database"""
+
     @classmethod
-    def detect_trending(cls, min_score=80):
-        """Select trending song based on score"""
-        trending = [s for s in cls.SPOTIFY_TRENDING if s["trend_score"] >= min_score]
-        selected = random.choice(trending)
-        print(f"🎯 Trending Detected: {selected['title']} (Score: {selected['trend_score']})")
+    def select_story(cls, category: Optional[str] = None) -> Dict:
+        """Select a story, optionally by category"""
+        if category:
+            stories = [s for s in STORIES if s["category"] == category]
+            if not stories:
+                stories = STORIES
+        else:
+            stories = STORIES
+
+        selected = random.choice(stories)
+        print(f"Story Selected: {selected['title']}")
+        print(f"   Category: {selected['category']}")
+        print(f"   Moral: {selected['moral']}")
+        print(f"   Characters: {', '.join(selected['characters'])}")
         return selected
-    
+
     @classmethod
-    def fetch_spotify_trending(cls):
-        """Fetch from Spotify API if credentials available"""
-        try:
-            if not CONFIG["SPOTIFY_CLIENT_ID"] or not CONFIG["SPOTIFY_CLIENT_SECRET"]:
-                return None
-            
-            # Get access token
-            auth = base64.b64encode(f"{CONFIG['SPOTIFY_CLIENT_ID']}:{CONFIG['SPOTIFY_CLIENT_SECRET']}".encode()).decode()
-            headers = {"Authorization": f"Basic {auth}"}
-            data = {"grant_type": "client_credentials"}
-            
-            response = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
-            token = response.json().get("access_token")
-            
-            # Get trending in India
-            headers = {"Authorization": f"Bearer {token}"}
-            response = requests.get(
-                "https://api.spotify.com/v1/playlists/37i9dQZEVXbLZ52XmncU0o/tracks",  # India Top 50
-                headers=headers,
-                params={"limit": 10}
-            )
-            
-            tracks = response.json().get("items", [])
-            if tracks:
-                track = random.choice(tracks)["track"]
-                return {
-                    "title": track["name"],
-                    "artist": track["artists"][0]["name"],
-                    "lang": "hindi",
-                    "mood": "party",
-                    "trend_score": 90
-                }
-        except Exception as e:
-            print(f"⚠️ Spotify API failed: {e}")
-        return None
+    def list_stories(cls) -> List[Dict]:
+        """List all available stories"""
+        return [{"title": s["title"], "category": s["category"], "moral": s["moral"]} for s in STORIES]
 
-# ============ STEP 2: LYRICS FETCH ============
-class LyricsFetcher:
-    """Fetch lyrics from multiple sources"""
-    
-    @staticmethod
-    def fetch_genius(title, artist):
-        """Fetch from Genius API"""
-        try:
-            if not CONFIG["GENIUS_API_KEY"]:
-                return None
-            
-            search_url = "https://api.genius.com/search"
-            headers = {"Authorization": f"Bearer {CONFIG['GENIUS_API_KEY']}"}
-            params = {"q": f"{title} {artist}"}
-            
-            response = requests.get(search_url, headers=headers, params=params, timeout=20)
-            data = response.json()
-            
-            if data["response"]["hits"]:
-                song_path = data["response"]["hits"][0]["result"]["path"]
-                song_url = f"https://genius.com{song_path}"
-                
-                page = requests.get(song_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-                html = page.text
-                
-                # Extract lyrics
-                lyrics_match = re.search(r'<div[^>]*data-lyrics-container[^>]*>(.*?)</div>', html, re.DOTALL)
-                if lyrics_match:
-                    lyrics = re.sub(r'<[^>]+>', '', lyrics_match.group(1))
-                    lyrics = re.sub(r'\[.*?\]', '', lyrics)
-                    lyrics = re.sub(r'\n+', '\n', lyrics).strip()
-                    print(f"✅ Genius lyrics fetched: {len(lyrics.split(chr(10)))} lines")
-                    return lyrics
-        except Exception as e:
-            print(f"⚠️ Genius failed: {e}")
-        return None
-    
-    @staticmethod
-    def fetch_mock_lyrics(song):
-        """Generate realistic mock lyrics"""
-        title = song["title"]
-        lang = song["lang"]
-        mood = song["mood"]
-        
-        templates = {
-            "hindi": {
-                "romantic": f"""{title}... {title}...
+# ============ STEP 2: HINDI TTS AUDIO GENERATION ============
+class HindiTTSGenerator:
+    """Generate Hindi audio using edge-tts with kid-friendly voices"""
 
-ये दिल तेरे लिए धड़कता है
-हर पल तुझे ही सोचता है
-तू है मेरी ज़िंदगानी
-तू है मेरा सब कुछ
+    HINDI_VOICES = [
+        "hi-IN-SwaraNeural",
+        "hi-IN-MadhurNeural",
+        "hi-IN-AaravNeural",
+    ]
 
-{title}... {title}...
+    @classmethod
+    def generate(cls, text: str, output_file: str = "audio.mp3", voice: Optional[str] = None) -> str:
+        """Generate Hindi audio with edge-tts"""
+        print("Generating Hindi audio...")
 
-आँखों में तेरी खोया रहता हूँ
-सपनों में तेरे सोया रहता हूँ
-तू जो मिले तो लगे जहाँ मिल गया
-तू जो न मिले तो लगे सब खो गया
+        if not voice:
+            voice = random.choice(cls.HINDI_VOICES)
 
-{title}... {title}...
+        print(f"   Voice: {voice}")
 
-तेरे बिना नहीं लगता दिल
-तेरे बिना नहीं जीना यहाँ
-तू ही तो है मेरा हमसफर
-तू ही तो है मेरा प्यार
-
-{title}... {title}...
-तेरे संग जीना यहाँ
-तेरे संग मरना यहाँ
-
-{title}... {title}...""",
-                "energetic": f"""{title}... {title}...
-
-आजा आजा आजा नाचे गाएँ
-आजा आजा आजा मस्ती में जाएँ
-दिल की धड़कन बढ़ी जाए
-नाचे नाचे नाचे जाए
-
-{title}... {title}...
-
-होश उड़ गए सबके यहाँ
-जब देखा तुझको मैंने यहाँ
-तेरा नाच दिवाना बनाए
-सबको यहाँ मस्ती छाए
-
-{title}... {title}...
-
-झूम झूम झूम झूम
-नाच नाच नाच नाच
-गा गा गा गा
-मस्ती में जा जा जा
-
-{title}... {title}...
-आज रात न सोएँगे
-आज रात नाचेंगे
-
-{title}... {title}...""",
-                "party": f"""{title}... {title}...
-
-डीजे बजे लाइट्स चमकें
-सब नाचे मस्ती में
-दारू पिए मौज करें
-आज रात जश्न में
-
-{title}... {title}...
-
-तेरी आँखें शराबी लगें
-तेरे होंठ गुलाबी लगें
-तेरा नाच कातिल लगे
-सब देखें तुझको यहाँ
-
-{title}... {title}...
-
-लगा दे तू आग आज
-मचा दे तू शोर आज
-आज रात है हमारी
-आज रात नाचो सारी
-
-{title}... {title}...
-पार्टी शुरू हो गई
-पार्टी शुरू हो गई
-
-{title}... {title}...""",
-                "traditional": f"""{title}... {title}...
-
-घूमर घूमर नाचे रे
-घूमर घूमर गाए रे
-परंपरा की रीत निभाए
-संस्कृति की शान बढाए
-
-{title}... {title}...
-
-माथे पे बिंदिया चमके
-हाथों में चूड़ियाँ खनके
-पैरों में पायल छनके
-नाचे नाचे गाए रे
-
-{title}... {title}...
-
-देशी धुन में नाचे रे
-देशी गीत में गाए रे
-हमारी संस्कृति प्यारी
-हमारी परंपरा न्यारी
-
-{title}... {title}...
-घूमर घूमर घूमर
-नाचे नाचे नाचे
-
-{title}... {title}...""",
-            },
-            "punjabi": {
-                "party": f"""{title}... {title}...
-
-ਲਹਿੰਦੇ ਪੰਜਾਬ ਦੀ ਜਾਣ ਤੂੰ
-ਸੋਹਣੇ ਮੁੰਡੇ ਚ ਚਾਣ ਤੂੰ
-ਨਖ਼ਰੇ ਤੇਰੇ ਨੀ ਮੈਨੂੰ ਭਾਉਂਦੇ
-ਤੇਰੇ ਨਾਲੋ ਵੱਧ ਮੈਨੂੰ ਕੌਣ ਚਾਹੁੰਦੇ
-
-{title}... {title}...
-
-ਜੱਟ ਦਾ ਮੁਕਾਬਲਾ ਦੁਨੀਆਂ ਤੋਂ ਏਨੀ
-ਤੇਰੇ ਨੈਣਾਂ ਚ ਵੱਸਦੀ ਜੰਨਤ ਮੇਨੀ
-ਤੇਰੇ ਹੱਥਾਂ ਚ ਮੈਂ ਆਪਣਾ ਦਿਲ ਦੇ ਦਿੱਤਾ
-ਤੇਰੇ ਪਿਆਰ ਚ ਮੈਂ ਆਪਣਾ ਸਭ ਕੁਝ ਲੁੱਟਾ ਦਿੱਤਾ
-
-{title}... {title}...
-
-ਨੱਚ ਨੱਚ ਨੱਚ ਨੱਚ
-ਗਾ ਗਾ ਗਾ ਗਾ
-ਮੌਜ ਕਰ ਮੌਜ ਕਰ
-ਆਜ ਰਾਤ ਸਾਡੀ ਆ
-
-{title}... {title}...
-ਪੰਜਾਬੀ ਸ਼ਾਨ ਆਪਣੀ
-ਪੰਜਾਬੀ ਮਾਨ ਆਪਣਾ
-
-{title}... {title}...""",
-            },
-            "haryanvi": {
-                "traditional": f"""{title}... {title}...
-
-तेरा घूँघट न्यारा लागे
-तेरी आँख्या का काजल प्यारा लागे
-तेरी चाल में जादू सा है
-तेरी हँसी में खुशी का राज़ है
-
-{title}... {title}...
-
-52 गज का दामन तेरा झूमे
-हरियाणे की शान तू है
-तेरे नाच में देशी धुन है
-तेरे गाने में हरियाणे की सुन है
-
-{title}... {title}...
-
-झूम झूम झूम झूम
-नाच नाच नाच नाच
-गा गा गा गा
-हरियाणे की शान
-
-{title}... {title}...
-घूमर घूमर घूमर
-नाचे नाचे नाचे
-
-{title}... {title}...""",
-            },
-            "bhojpuri": {
-                "party": f"""{title}... {title}...
-
-लइका लागेलू लॉलीपॉप
-हमार लइका लागेलू लॉलीपॉप
-के हु नाय देले बाप रे
-हमार लइका लागेलू लॉलीपॉप
-
-{title}... {title}...
-
-कमरिया हिलावे लाल घाघरा
-नाचे नाचे गोरी गोरी कमरिया
-भोजपुरी के लहरा में लहरा
-हमार गोरी गोरी कमरिया
-
-{title}... {title}...
-
-नाच नाच नाच नाच
-गा गा गा गा
-भोजपुरी के शान
-भोजपुरी के मान
-
-{title}... {title}...
-लइका लागेलू लॉलीपॉप
-लइका लागेलू लॉलीपॉप
-
-{title}... {title}...""",
-            }
-        }
-        
-        lang_templates = templates.get(lang, templates["hindi"])
-        mood_template = lang_templates.get(mood, lang_templates.get("romantic", list(lang_templates.values())[0]))
-        return mood_template
-
-# ============ STEP 3: AUDIO GENERATION ============
-class AudioGenerator:
-    """Generate audio with multiple TTS options"""
-    
-    @staticmethod
-    def generate_edge_tts(text, output_file, lang="hindi"):
-        """Use Microsoft Edge TTS (Best quality)"""
         try:
             import edge_tts
-            import asyncio
-            
-            voices = {
-                "hindi": ["hi-IN-SwaraNeural", "hi-IN-MadhurNeural", "hi-IN-AaravNeural"],
-                "punjabi": ["hi-IN-SwaraNeural"],
-                "haryanvi": ["hi-IN-MadhurNeural"],
-                "bhojpuri": ["hi-IN-SwaraNeural"]
-            }
-            
-            voice = random.choice(voices.get(lang, ["hi-IN-SwaraNeural"]))
-            print(f"  🎙️ Voice: {voice}")
-            
-            async def generate():
-                communicate = edge_tts.Communicate(text, voice, rate="+5%", pitch="+2Hz")
+
+            async def _generate():
+                communicate = edge_tts.Communicate(
+                    text, 
+                    voice, 
+                    rate="-5%",
+                    pitch="+5Hz",
+                    volume="+10%"
+                )
                 await communicate.save(output_file)
-            
-            asyncio.run(generate())
-            
+
+            asyncio.run(_generate())
+
             if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
-                return True
-                
+                print(f"Audio generated: {output_file}")
+                return output_file
+
         except Exception as e:
-            print(f"  ⚠️ edge-tts failed: {e}")
-        return False
-    
-    @staticmethod
-    def generate_gtts(text, output_file):
-        """Fallback to Google TTS"""
+            print(f"edge-tts failed: {e}")
+
+        print("   Falling back to gTTS...")
         try:
             from gtts import gTTS
             tts = gTTS(text=text, lang='hi', slow=False)
             tts.save(output_file)
-            return True
+            print(f"Audio generated (gTTS fallback): {output_file}")
+            return output_file
         except Exception as e:
-            print(f"  ❌ gTTS failed: {e}")
-            return False
-    
-    @classmethod
-    def generate(cls, text, output_file="audio.mp3", lang="hindi"):
-        """Generate audio with fallback"""
-        print("🔊 Generating audio...")
-        
-        # Try edge-tts first
-        if cls.generate_edge_tts(text, output_file, lang):
-            print("✅ Audio: edge-tts")
-            return output_file
-        
-        # Fallback to gTTS
-        print("  🔄 Falling back to gTTS...")
-        if cls.generate_gtts(text, output_file):
-            print("✅ Audio: gTTS (fallback)")
-            return output_file
-        
-        raise Exception("All TTS failed!")
+            print(f"gTTS also failed: {e}")
+            raise
+
+# ============ STEP 3: AUDIO ANALYSIS ============
+class AudioAnalyzer:
+    """Analyze audio for duration and simple beat patterns"""
+
+    @staticmethod
+    def analyze(audio_file: str) -> Tuple[List[float], float]:
+        """Get audio duration and create word-timing beats"""
+        print("Analyzing audio...")
+
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "json", audio_file],
+                capture_output=True, text=True, timeout=10
+            )
+            info = json.loads(result.stdout)
+            duration = float(info["format"]["duration"])
+
+            beats = [i * 2.0 for i in range(int(duration / 2.0) + 1)]
+
+            print(f"Duration: {duration:.1f}s, Beats: {len(beats)}")
+            return beats, duration
+
+        except Exception as e:
+            print(f"Analysis failed: {e}")
+            duration = 120
+            beats = [i * 2.0 for i in range(60)]
+            return beats, duration
 
 # ============ STEP 4: BACKGROUND VIDEO FETCH ============
-class VideoFetcher:
-    """Fetch background videos from Pexels"""
-    
-    @staticmethod
-    def search_videos(query, per_page=5):
+class BackgroundVideoFetcher:
+    """Fetch kid-friendly background videos from Pexels"""
+
+    THEME_QUERIES = {
+        "forest": "forest animals nature kids cartoon",
+        "village": "village india countryside kids",
+        "jungle": "jungle animals lion elephant kids",
+        "meadow": "meadow flowers butterflies kids nature",
+        "night": "night sky stars moon kids dreamy",
+    }
+
+    @classmethod
+    def fetch(cls, theme: str, duration: float) -> Optional[str]:
+        """Fetch and prepare background video"""
+        print("Fetching background video...")
+
+        if not CONFIG["PEXELS_API_KEY"]:
+            print("No Pexels API key, using animated gradient background")
+            return None
+
+        query = cls.THEME_QUERIES.get(theme, "kids animated nature")
+
         try:
-            if not CONFIG["PEXELS_API_KEY"]:
-                print("⚠️ No Pexels API key")
-                return []
-            
             url = "https://api.pexels.com/videos/search"
             headers = {"Authorization": CONFIG["PEXELS_API_KEY"]}
             params = {
                 "query": query,
-                "per_page": per_page,
+                "per_page": 3,
                 "orientation": "landscape",
                 "size": "large"
             }
-            
+
             response = requests.get(url, headers=headers, params=params, timeout=30)
             data = response.json()
-            
+
             videos = []
             if "videos" in data:
                 for video in data["videos"]:
@@ -451,155 +422,320 @@ class VideoFetcher:
                         if file.get("file_type") == "video/mp4" and file.get("width", 0) >= 1280:
                             videos.append({
                                 "url": file["link"],
-                                "duration": video.get("duration", 15),
-                                "width": file.get("width", 1920),
-                                "height": file.get("height", 1080)
+                                "duration": video.get("duration", 15)
                             })
                             break
-            
-            print(f"✅ Pexels: {len(videos)} videos")
-            return videos
-            
-        except Exception as e:
-            print(f"❌ Pexels error: {e}")
-            return []
-    
-    @staticmethod
-    def download(url, filename):
-        try:
-            print(f"  📥 Downloading...")
-            response = requests.get(url, stream=True, timeout=60)
-            with open(filename, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
-        except Exception as e:
-            print(f"  ❌ Download failed: {e}")
-            return False
 
-# ============ STEP 5: BEAT SYNC ANALYSIS ============
-class BeatAnalyzer:
-    """Analyze audio for beat detection"""
-    
-    @staticmethod
-    def analyze_beats(audio_file):
-        """Simple beat detection using ffmpeg"""
-        try:
-            # Get audio info
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "json", audio_file],
-                capture_output=True, text=True
-            )
-            info = json.loads(result.stdout)
-            duration = float(info["format"]["duration"])
-            
-            # Simulate beat pattern (every 0.5 seconds for 120 BPM)
-            beats = []
-            beat_interval = 0.5
-            t = 0
-            while t < duration:
-                beats.append(t)
-                t += beat_interval
-            
-            print(f"✅ Beat analysis: {len(beats)} beats detected")
-            return beats, duration
-            
-        except Exception as e:
-            print(f"⚠️ Beat analysis failed: {e}")
-            # Return simple pattern
-            duration = 180  # 3 minutes default
-            beats = [i * 0.5 for i in range(int(duration / 0.5))]
-            return beats, duration
+            if not videos:
+                print("No videos found, using animated gradient")
+                return None
 
-# ============ STEP 6: ANIMATED LYRICS RENDERING ============
-class LyricsRenderer:
-    """Render animated lyrics video"""
-    
-    MOOD_COLORS = {
-        "romantic": {"bg": (60, 15, 40), "accent": (255, 100, 150), "glow": (255, 50, 100), "text": (255, 220, 230)},
-        "energetic": {"bg": (50, 30, 10), "accent": (255, 200, 50), "glow": (255, 150, 0), "text": (255, 255, 200)},
-        "party": {"bg": (15, 15, 50), "accent": (100, 255, 100), "glow": (50, 255, 50), "text": (200, 255, 200)},
-        "traditional": {"bg": (50, 25, 10), "accent": (255, 150, 50), "glow": (255, 100, 0), "text": (255, 230, 200)},
-    }
-    
-    def __init__(self, song, lyrics_lines, beats, duration):
-        self.song = song
-        self.lyrics_lines = lyrics_lines
+            video_files = []
+            for i, v in enumerate(videos[:2]):
+                fname = f"{CONFIG['TEMP_DIR']}/bg_{i}.mp4"
+                print(f"   Downloading video {i+1}...")
+                r = requests.get(v["url"], stream=True, timeout=60)
+                with open(fname, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                video_files.append({"file": fname, "duration": v["duration"]})
+
+            if len(video_files) > 1:
+                with open(f"{CONFIG['TEMP_DIR']}/concat.txt", "w") as f:
+                    for vf in video_files:
+                        f.write(f"file '{vf['file']}'\n")
+
+                bg_file = f"{CONFIG['TEMP_DIR']}/background.mp4"
+                subprocess.run([
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", f"{CONFIG['TEMP_DIR']}/concat.txt",
+                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                    "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
+                    bg_file
+                ], check=True, capture_output=True)
+
+                return bg_file
+            elif video_files:
+                bg_file = f"{CONFIG['TEMP_DIR']}/background.mp4"
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", video_files[0]["file"],
+                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                    "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
+                    bg_file
+                ], check=True, capture_output=True)
+                return bg_file
+
+        except Exception as e:
+            print(f"Video fetch failed: {e}")
+
+        return None
+
+# ============ STEP 5: STORY VIDEO RENDERER ============
+class StoryVideoRenderer:
+    """Render animated story video with word-by-word highlighting"""
+
+    def __init__(self, story: Dict, beats: List[float], duration: float):
+        self.story = story
         self.beats = beats
         self.duration = duration
-        self.colors = self.MOOD_COLORS.get(song["mood"], self.MOOD_COLORS["romantic"])
+        self.colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
         self.W, self.H = CONFIG["WIDTH"], CONFIG["HEIGHT"]
         self.fps = CONFIG["FPS"]
         self.total_frames = int(duration * self.fps)
-        
-    def render(self, background_video=None):
+
+        self.sentences = [s.strip() for s in story["content"].split("\n") if s.strip()]
+        self.words = []
+        self._build_word_timings()
+
+    def _build_word_timings(self):
+        """Calculate timing for each word"""
+        all_text = " ".join(self.sentences)
+        words = all_text.split()
+
+        if not words:
+            return
+
+        time_per_word = self.duration / len(words)
+        current_time = 0
+
+        for word in words:
+            clean_word = re.sub(r'[^\w\s]', '', word).strip()
+            if clean_word:
+                self.words.append({
+                    "word": clean_word,
+                    "start_time": current_time,
+                    "end_time": current_time + time_per_word,
+                    "duration": time_per_word
+                })
+                current_time += time_per_word
+
+    def _get_current_word(self, t: float) -> Optional[Dict]:
+        """Get the word at current time"""
+        for wd in self.words:
+            if wd["start_time"] <= t < wd["end_time"]:
+                return wd
+        return None
+
+    def _get_beat_pulse(self, t: float) -> float:
+        """Get visual pulse intensity at time t"""
+        nearest = min(self.beats, key=lambda x: abs(x - t))
+        distance = abs(nearest - t)
+        return max(0, 1 - distance * 3)
+
+    def _create_background(self, frame_num: int, bg_frames: Optional[List] = None) -> Image.Image:
+        """Create animated background"""
+        if bg_frames and frame_num < len(bg_frames):
+            return Image.fromarray(bg_frames[frame_num]).convert("RGB")
+
+        img = Image.new('RGB', (self.W, self.H), self.colors["bg"][0])
+        draw = ImageDraw.Draw(img)
+
+        progress = frame_num / max(self.total_frames, 1)
+
+        for y in range(self.H):
+            ratio = y / self.H
+            r = int(self.colors["bg"][0][0] + (self.colors["bg"][1][0] - self.colors["bg"][0][0]) * ratio)
+            g = int(self.colors["bg"][0][1] + (self.colors["bg"][1][1] - self.colors["bg"][0][1]) * ratio)
+            b = int(self.colors["bg"][0][2] + (self.colors["bg"][1][2] - self.colors["bg"][0][2]) * ratio)
+            draw.line([(0, y), (self.W, y)], fill=(r, g, b))
+
+        for i in range(50):
+            x = int((self.W * (i / 50) + frame_num * 2) % self.W)
+            y = int((self.H * 0.3 * (i % 7) + frame_num * 1.5) % self.H)
+            size = int(3 + 5 * abs(math.sin(progress * 6 + i)))
+            color = random.choice(self.colors["particle_colors"])
+            draw.ellipse([x, y, x+size, y+size], fill=color)
+
+        return img
+
+    def render_frame(self, frame_num: int, bg_frames: Optional[List] = None) -> np.ndarray:
+        """Render a single frame"""
+        t = frame_num / self.fps
+
+        img = self._create_background(frame_num, bg_frames)
+        draw = ImageDraw.Draw(img)
+
+        beat_pulse = self._get_beat_pulse(t)
+        current_word = self._get_current_word(t)
+
+        try:
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+            story_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
+            word_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
+            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+        except:
+            title_font = ImageFont.load_default()
+            story_font = ImageFont.load_default()
+            word_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+            moral_font = ImageFont.load_default()
+
+        draw.rectangle([0, 0, self.W, 100], fill=(0, 0, 0, 200))
+        title = f"{self.story['title']}"
+        bbox = draw.textbbox((0, 0), title, font=title_font)
+        tw = bbox[2] - bbox[0]
+        draw.text(((self.W - tw) // 2, 30), title, fill=(255, 255, 255), font=title_font)
+
+        if current_word:
+            all_text = " ".join(self.sentences)
+            all_words = all_text.split()
+
+            word_count = 0
+            current_sentence = self.sentences[0] if self.sentences else ""
+            for sent in self.sentences:
+                sent_words = sent.split()
+                if word_count <= len([w for w in self.words if w["start_time"] <= t]) < word_count + len(sent_words):
+                    current_sentence = sent
+                    break
+                word_count += len(sent_words)
+
+            lines = textwrap.wrap(current_sentence, width=35)
+            y = 280
+            for line in lines:
+                words = line.split()
+                x_start = self.W // 2
+                total_width = 0
+                word_widths = []
+                for word in words:
+                    bbox = draw.textbbox((0, 0), word + " ", font=word_font)
+                    w = bbox[2] - bbox[0]
+                    word_widths.append(w)
+                    total_width += w
+
+                x = x_start - total_width // 2
+
+                for i, word in enumerate(words):
+                    clean = re.sub(r'[^\w\s]', '', word).strip()
+                    is_active = current_word and clean.lower() == current_word["word"].lower()
+
+                    if is_active:
+                        pulse = beat_pulse
+                        color = (
+                            min(255, self.colors["highlight"][0] + int(pulse * 60)),
+                            min(255, self.colors["highlight"][1] + int(pulse * 60)),
+                            min(255, self.colors["highlight"][2] + int(pulse * 60))
+                        )
+                        for glow in range(4, 0, -1):
+                            draw.text((x, y), word, 
+                                     fill=(color[0]//glow, color[1]//glow, color[2]//glow), 
+                                     font=word_font)
+                    else:
+                        color = self.colors["text"]
+
+                    draw.text((x, y), word, fill=color, font=word_font)
+                    x += word_widths[i]
+
+                y += 85
+
+            prev_sent_idx = -1
+            wc = 0
+            for idx, sent in enumerate(self.sentences):
+                sw = sent.split()
+                if wc + len(sw) > len([w for w in self.words if w["start_time"] <= t]):
+                    prev_sent_idx = idx - 1
+                    break
+                wc += len(sw)
+
+            if prev_sent_idx >= 0:
+                prev_lines = textwrap.wrap(self.sentences[prev_sent_idx], width=40)
+                y = 180
+                for line in prev_lines:
+                    bbox = draw.textbbox((0, 0), line, font=small_font)
+                    tw = bbox[2] - bbox[0]
+                    draw.text(((self.W - tw) // 2, y), line, fill=(130, 130, 130), font=small_font)
+                    y += 40
+
+            next_sent_idx = -1
+            wc = 0
+            for idx, sent in enumerate(self.sentences):
+                sw = sent.split()
+                if wc + len(sw) > len([w for w in self.words if w["start_time"] <= t]):
+                    next_sent_idx = idx + 1
+                    break
+                wc += len(sw)
+
+            if 0 <= next_sent_idx < len(self.sentences):
+                next_lines = textwrap.wrap(self.sentences[next_sent_idx], width=40)
+                y = 550
+                for line in next_lines:
+                    bbox = draw.textbbox((0, 0), line, font=small_font)
+                    tw = bbox[2] - bbox[0]
+                    draw.text(((self.W - tw) // 2, y), line, fill=(180, 180, 180), font=small_font)
+                    y += 40
+
+        if t > self.duration * 0.8:
+            moral_alpha = min(255, int((t - self.duration * 0.8) / (self.duration * 0.2) * 255))
+            moral_text = f"Seekh: {self.story['moral']}"
+            bbox = draw.textbbox((0, 0), moral_text, font=moral_font)
+            tw = bbox[2] - bbox[0]
+            draw.rectangle([self.W*0.1, self.H-120, self.W*0.9, self.H-60], 
+                          fill=(0, 0, 0, moral_alpha))
+            draw.text(((self.W - tw) // 2, self.H - 105), moral_text, 
+                     fill=(255, 255, 200), font=moral_font)
+
+        bar_count = 40
+        bar_width = self.W * 0.8 / bar_count
+        for i in range(bar_count):
+            bar_h = int(12 + beat_pulse * 35 * (0.5 + 0.5 * math.sin(i * 0.6 + t * 8)))
+            x = self.W * 0.1 + i * bar_width
+            y = self.H - 45 - bar_h
+            color = random.choice(self.colors["particle_colors"])
+            draw.rounded_rectangle([x, y, x + bar_width - 3, self.H - 45], 
+                                    radius=3, fill=color)
+
+        progress = t / self.duration
+        bar_width = int(self.W * 0.8 * progress)
+        draw.rectangle([self.W*0.1, self.H-20, self.W*0.9, self.H-15], fill=(50, 50, 50))
+        draw.rectangle([self.W*0.1, self.H-20, self.W*0.1 + bar_width, self.H-15], 
+                      fill=self.colors["accent"])
+
+        time_str = f"{int(t//60):02d}:{int(t%60):02d}"
+        bbox = draw.textbbox((0, 0), time_str, font=small_font)
+        tw = bbox[2] - bbox[0]
+        draw.text((self.W - tw - 60, self.H - 50), time_str, fill=(255, 255, 255), font=small_font)
+
+        return np.array(img)
+
+    def render(self, bg_video: Optional[str] = None) -> str:
         """Render complete video"""
-        print(f"🎬 Rendering {self.total_frames} frames...")
-        
-        # Extract background frames if video available
+        print(f"Rendering {self.total_frames} frames...")
+
         bg_frames = []
-        if background_video and os.path.exists(background_video):
-            print("  Extracting background frames...")
+        if bg_video and os.path.exists(bg_video):
+            print("   Extracting background frames...")
             frame_dir = f"{CONFIG['TEMP_DIR']}/bg_frames"
             Path(frame_dir).mkdir(exist_ok=True)
-            
+
             subprocess.run([
-                "ffmpeg", "-y", "-i", background_video,
+                "ffmpeg", "-y", "-i", bg_video,
                 "-vf", f"fps={self.fps},scale={self.W}:{self.H}",
                 "-q:v", "2", f"{frame_dir}/frame_%05d.jpg"
             ], check=True, capture_output=True)
-            
-            bg_files = sorted([f for f in os.listdir(frame_dir) if f.endswith('.jpg')])
-            for f in bg_files:
-                img = Image.open(f"{frame_dir}/{f}").convert("RGB")
-                bg_frames.append(np.array(img))
-            
-            # Loop if needed
+
+            for f in sorted(os.listdir(frame_dir)):
+                if f.endswith('.jpg'):
+                    img = Image.open(f"{frame_dir}/{f}").convert("RGB")
+                    bg_frames.append(np.array(img))
+
             while len(bg_frames) < self.total_frames:
                 bg_frames.extend(bg_frames[:min(len(bg_frames), self.total_frames - len(bg_frames))])
-            
-            # Cleanup
+
             shutil.rmtree(frame_dir)
-        
-        # Calculate lyrics timing
-        lines_per_frame = len(self.lyrics_lines) / self.total_frames
-        seg_duration = self.duration / max(len(self.lyrics_lines), 1)
-        
-        # Render frames
+
         output_dir = f"{CONFIG['TEMP_DIR']}/frames"
         Path(output_dir).mkdir(exist_ok=True)
-        
+
         for i in range(self.total_frames):
-            t = i / self.fps
-            
-            # Get background
-            if i < len(bg_frames):
-                bg = Image.fromarray(bg_frames[i]).convert("RGB")
-            else:
-                bg = self._create_gradient_bg(i)
-            
-            # Calculate current lyrics
-            line_idx = min(int(t / seg_duration), len(self.lyrics_lines) - 1)
-            prev_idx = max(0, line_idx - 1)
-            next_idx = min(len(self.lyrics_lines) - 1, line_idx + 1)
-            
-            # Beat pulse
-            beat_pulse = self._get_beat_pulse(t)
-            
-            # Add lyrics overlay
-            frame = self._add_lyrics_overlay(bg, line_idx, prev_idx, next_idx, beat_pulse, i / self.total_frames)
-            
-            # Save
-            frame.save(f"{output_dir}/frame_{i:05d}.png")
-            
+            frame = self.render_frame(i, bg_frames if i < len(bg_frames) else None)
+            Image.fromarray(frame).save(f"{output_dir}/frame_{i:05d}.png")
+
             if i % 60 == 0:
-                print(f"  Frame {i}/{self.total_frames}")
-        
-        # Compile video
-        print("🎬 Compiling final video...")
-        output_file = f"{CONFIG['OUTPUT_DIR']}/video.mp4"
-        
+                print(f"   Frame {i}/{self.total_frames}")
+
+        print("Compiling video...")
+        output_file = f"{CONFIG['OUTPUT_DIR']}/story_video.mp4"
+
         subprocess.run([
             "ffmpeg", "-y", "-framerate", str(self.fps),
             "-i", f"{output_dir}/frame_%05d.png",
@@ -608,440 +744,263 @@ class LyricsRenderer:
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", output_file
         ], check=True, capture_output=True)
-        
-        # Cleanup
-        shutil.rmtree(output_dir)
-        
-        print(f"✅ Video rendered: {output_file}")
-        return output_file
-    
-    def _create_gradient_bg(self, frame_num):
-        """Create animated gradient background"""
-        img = Image.new('RGB', (self.W, self.H), self.colors["bg"])
-        draw = ImageDraw.Draw(img)
-        
-        progress = frame_num / self.total_frames
-        
-        # Animated gradient
-        for y in range(self.H):
-            r = int(self.colors["bg"][0] + (self.colors["accent"][0] - self.colors["bg"][0]) * (y / self.H) * 0.3)
-            g = int(self.colors["bg"][1] + (self.colors["accent"][1] - self.colors["bg"][1]) * (y / self.H) * 0.3)
-            b = int(self.colors["bg"][2] + (self.colors["accent"][2] - self.colors["bg"][2]) * (y / self.H) * 0.3)
-            draw.line([(0, y), (self.W, y)], fill=(r, g, b))
-        
-        # Particles
-        for _ in range(30):
-            x = random.randint(0, self.W)
-            y = random.randint(0, self.H)
-            size = int(2 + 5 * abs(math.sin(progress * 10 + x)))
-            alpha = int(100 + 100 * abs(math.sin(progress * 5 + y)))
-            color = (
-                min(255, self.colors["accent"][0] + alpha),
-                min(255, self.colors["accent"][1] + alpha),
-                min(255, self.colors["accent"][2] + alpha)
-            )
-            draw.ellipse([x, y, x+size, y+size], fill=color)
-        
-        return img
-    
-    def _get_beat_pulse(self, t):
-        """Get beat intensity at time t"""
-        # Find nearest beat
-        nearest_beat = min(self.beats, key=lambda x: abs(x - t))
-        distance = abs(nearest_beat - t)
-        pulse = max(0, 1 - distance * 4)  # Decay over 0.25s
-        return pulse
-    
-    def _add_lyrics_overlay(self, bg, line_idx, prev_idx, next_idx, beat_pulse, progress):
-        """Add animated lyrics overlay"""
-        draw = ImageDraw.Draw(bg)
-        
-        # Load fonts
-        try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-            lyrics_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
-            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-        except:
-            title_font = ImageFont.load_default()
-            lyrics_font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
-        
-        # Title bar
-        draw.rectangle([0, 0, self.W, 90], fill=(0, 0, 0, 200))
-        title = f"🎵 {self.song['title']} - {self.song['artist']}"
-        bbox = draw.textbbox((0, 0), title, font=title_font)
-        tw = bbox[2] - bbox[0]
-        draw.text(((self.W - tw) // 2, 25), title, fill=(255, 255, 255), font=title_font)
-        
-        # Previous line (faded)
-        if prev_idx != line_idx and self.lyrics_lines[prev_idx]:
-            prev_lines = textwrap.wrap(self.lyrics_lines[prev_idx], width=30)
-            y = 200
-            for line in prev_lines:
-                bbox = draw.textbbox((0, 0), line, font=small_font)
-                tw = bbox[2] - bbox[0]
-                draw.text(((self.W - tw) // 2, y), line, fill=(120, 120, 120), font=small_font)
-                y += 35
-        
-        # Current line (highlighted with beat pulse)
-        if self.lyrics_lines[line_idx]:
-            current_lines = textwrap.wrap(self.lyrics_lines[line_idx], width=25)
-            
-            # Glow effect
-            glow_intensity = int(30 + beat_pulse * 50)
-            for glow in range(5, 0, -1):
-                gy = 350
-                for line in current_lines:
-                    bbox = draw.textbbox((0, 0), line, font=lyrics_font)
-                    tw = bbox[2] - bbox[0]
-                    draw.text(((self.W - tw) // 2, gy), line, 
-                             fill=(glow_intensity//glow, glow_intensity//glow, glow_intensity//glow), 
-                             font=lyrics_font)
-                    gy += 85
-            
-            # Main text with beat pulse color
-            pulse_color = (
-                min(255, self.colors["accent"][0] + int(beat_pulse * 100)),
-                min(255, self.colors["accent"][1] + int(beat_pulse * 100)),
-                min(255, self.colors["accent"][2] + int(beat_pulse * 100))
-            )
-            
-            gy = 350
-            for line in current_lines:
-                bbox = draw.textbbox((0, 0), line, font=lyrics_font)
-                tw = bbox[2] - bbox[0]
-                # Shadow
-                draw.text(((self.W - tw) // 2 + 3, gy + 3), line, fill=(0, 0, 0), font=lyrics_font)
-                # Main
-                draw.text(((self.W - tw) // 2, gy), line, fill=pulse_color, font=lyrics_font)
-                gy += 85
-        
-        # Next line (preview)
-        if next_idx != line_idx and self.lyrics_lines[next_idx]:
-            next_lines = textwrap.wrap(self.lyrics_lines[next_idx], width=30)
-            y = 600
-            for line in next_lines:
-                bbox = draw.textbbox((0, 0), line, font=small_font)
-                tw = bbox[2] - bbox[0]
-                draw.text(((self.W - tw) // 2, y), line, fill=(180, 180, 180), font=small_font)
-                y += 35
-        
-        # Visualizer bars
-        bar_count = 60
-        bar_width = self.W * 0.9 / bar_count
-        for i in range(bar_count):
-            bar_h = int(10 + beat_pulse * 40 * random.random() + 20 * abs(math.sin(i * 0.5 + progress * 10)))
-            x = self.W * 0.05 + i * bar_width
-            y = self.H - 50 - bar_h
-            color = (
-                int(self.colors["accent"][0] * (0.5 + 0.5 * random.random())),
-                int(self.colors["accent"][1] * (0.5 + 0.5 * random.random())),
-                int(self.colors["accent"][2] * (0.5 + 0.5 * random.random()))
-            )
-            draw.rectangle([x, y, x + bar_width - 2, self.H - 50], fill=color)
-        
-        # Progress bar
-        bar_width = int(self.W * 0.9 * progress)
-        draw.rectangle([self.W*0.05, self.H-15, self.W*0.95, self.H-10], fill=(60, 60, 60))
-        draw.rectangle([self.W*0.05, self.H-15, self.W*0.05 + bar_width, self.H-10], fill=self.colors["accent"])
-        
-        return bg
 
-# ============ STEP 7: THUMBNAIL GENERATION ============
-class ThumbnailGenerator:
-    """Generate YouTube thumbnail"""
-    
+        shutil.rmtree(output_dir)
+
+        print(f"Video: {output_file}")
+        return output_file
+
+# ============ STEP 6: THUMBNAIL GENERATION ============
+class StoryThumbnailGenerator:
+    """Generate kid-friendly YouTube thumbnail"""
+
     @staticmethod
-    def generate(song, output_file="thumbnail.jpg"):
-        print("🖼️ Generating thumbnail...")
-        
-        W, H = 1280, 720  # YouTube thumbnail size
-        
-        img = Image.new('RGB', (W, H), (20, 20, 40))
+    def generate(story: Dict, output_file: str = "thumbnail.jpg") -> str:
+        print("Generating thumbnail...")
+
+        W, H = 1280, 720
+        colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
+        c1, c2 = colors["bg"][0], colors["bg"][1]
+
+        img = Image.new('RGB', (W, H), c1)
         draw = ImageDraw.Draw(img)
-        
-        # Background gradient
-        colors = {
-            "romantic": [(80, 20, 60), (255, 100, 150)],
-            "energetic": [(60, 40, 10), (255, 200, 50)],
-            "party": [(20, 20, 60), (100, 255, 100)],
-            "traditional": [(60, 30, 10), (255, 150, 50)],
-        }
-        c1, c2 = colors.get(song["mood"], colors["romantic"])
-        
+
         for y in range(H):
-            r = int(c1[0] + (c2[0] - c1[0]) * (y / H))
-            g = int(c1[1] + (c2[1] - c1[1]) * (y / H))
-            b = int(c1[2] + (c2[2] - c1[2]) * (y / H))
+            ratio = y / H
+            r = int(c1[0] + (c2[0] - c1[0]) * ratio)
+            g = int(c1[1] + (c2[1] - c1[1]) * ratio)
+            b = int(c1[2] + (c2[2] - c1[2]) * ratio)
             draw.line([(0, y), (W, y)], fill=(r, g, b))
-        
-        # Load fonts
+
+        for _ in range(30):
+            x = random.randint(0, W)
+            y = random.randint(0, H)
+            size = random.randint(10, 60)
+            color = random.choice(colors["particle_colors"])
+            draw.ellipse([x, y, x+size, y+size], fill=color)
+
         try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 80)
-            artist_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
-            tag_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
+            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            tag_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
         except:
             title_font = ImageFont.load_default()
-            artist_font = ImageFont.load_default()
+            moral_font = ImageFont.load_default()
             tag_font = ImageFont.load_default()
-        
-        # Title
-        title = song["title"]
+
+        title = story["title"]
         lines = textwrap.wrap(title, width=15)
-        y = 200
+        y = 150
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=title_font)
             tw = bbox[2] - bbox[0]
-            # Shadow
             draw.text(((W - tw) // 2 + 4, y + 4), line, fill=(0, 0, 0), font=title_font)
-            # Main
             draw.text(((W - tw) // 2, y), line, fill=(255, 255, 255), font=title_font)
-            y += 95
-        
-        # Artist
-        artist = f"🎤 {song['artist']}"
-        bbox = draw.textbbox((0, 0), artist, font=artist_font)
+            y += 105
+
+        moral = f"{story['moral']}"
+        bbox = draw.textbbox((0, 0), moral, font=moral_font)
         tw = bbox[2] - bbox[0]
-        draw.text(((W - tw) // 2, 450), artist, fill=(255, 255, 200), font=artist_font)
-        
-        # Tags
-        tag = f"#{song['mood'].upper()} #LYRICS #ANIMATED"
+        draw.text(((W - tw) // 2, 420), moral, fill=(255, 255, 200), font=moral_font)
+
+        tag = f"#{story['category'].upper()} #HINDI #KIDS #STORY"
         bbox = draw.textbbox((0, 0), tag, font=tag_font)
         tw = bbox[2] - bbox[0]
-        draw.rectangle([(W - tw) // 2 - 20, 550, (W + tw) // 2 + 20, 600], fill=(0, 0, 0, 180))
-        draw.text(((W - tw) // 2, 560), tag, fill=(255, 255, 100), font=tag_font)
-        
-        # Trending badge
-        draw.rectangle([50, 50, 300, 110], fill=(255, 0, 0), outline=(255, 255, 255), width=3)
-        draw.text((70, 60), "🔥 TRENDING", fill=(255, 255, 255), font=tag_font)
-        
+        draw.rectangle([(W - tw) // 2 - 20, 520, (W + tw) // 2 + 20, 570], fill=(0, 0, 0, 180))
+        draw.text(((W - tw) // 2, 530), tag, fill=(255, 255, 100), font=tag_font)
+
+        draw.rounded_rectangle([50, 50, 280, 110], radius=10, fill=(255, 100, 100), outline=(255, 255, 255), width=3)
+        draw.text((70, 60), "KIDS STORY", fill=(255, 255, 255), font=tag_font)
+
+        draw.rounded_rectangle([W-280, 50, W-50, 110], radius=10, fill=(100, 200, 100), outline=(255, 255, 255), width=3)
+        draw.text((W-260, 60), "HINDI", fill=(255, 255, 255), font=tag_font)
+
         img.save(output_file)
-        print(f"✅ Thumbnail: {output_file}")
+        print(f"Thumbnail: {output_file}")
         return output_file
 
-# ============ STEP 8: METADATA GENERATION ============
-class MetadataGenerator:
-    """Generate YouTube metadata"""
-    
+# ============ STEP 7: METADATA GENERATION ============
+class StoryMetadataGenerator:
+    """Generate YouTube metadata for kids stories"""
+
     @staticmethod
-    def generate(song, lyrics_lines):
-        print("📝 Generating metadata...")
-        
-        title = f"🎵 {song['title']} - {song['artist']} | Animated Lyrics | {song['lang'].upper()}"
-        
-        desc_lines = "\n".join([f"🎶 {line}" for line in lyrics_lines[:15]])
-        
-        description = f"""🎵 {song['title']} - {song['artist']}
+    def generate(story: Dict) -> Dict:
+        print("Generating metadata...")
 
-🎤 Animated Lyrics Video
-🎭 Mood: {song['mood'].capitalize()}
-🌐 Language: {song['lang'].capitalize()}
-🔥 Trending Score: {song['trend_score']}/100
-
-📜 Lyrics:
-{desc_lines}
-
-✨ Features:
-• Animated Lyrics with Beat Sync
-• Colorful Visual Effects
-• Karaoke Style Highlighting
-• Professional Editing
-
-🎧 Listen & Enjoy!
-
-#AnimatedLyrics #{song['title'].replace(' ', '')} #{song['artist'].replace(' ', '')} #{song['lang']} #Trending #Karaoke #LyricsVideo"""
-        
-        tags = [
-            song["title"], song["artist"], "animated lyrics", song["lang"],
-            "trending", "karaoke", song["mood"], "hindi songs", "lyrics video",
-            "music", "bollywood", "punjabi", "haryanvi", "bhojpuri"
+        title_templates = [
+            f"{story['title']} | Hindi Kids Story | Moral Story",
+            f"{story['title']} | Animated Hindi Story for Children",
+            f"Hindi Kahani: {story['title']} | Kids Moral Story",
         ]
-        
-        print("✅ Metadata generated")
+        title = random.choice(title_templates)
+
+        description = f"""{story['title']}
+
+{story['title_en']}
+
+Moral: {story['moral']}
+Category: {story['category'].capitalize()}
+Characters: {', '.join(story['characters'])}
+
+Enjoy this beautiful Hindi moral story for kids!
+
+Features:
+- Animated Text with Word Highlighting
+- Kid-Friendly Visuals
+- Clear Hindi Voice
+- Moral Learning
+
+#HindiStories #KidsStories #MoralStories #HindiKahani #ChildrenStories #BedtimeStories"""
+
+        tags = [
+            story["title"], "hindi story", "kids story", "moral story",
+            "hindi kahani", "children story", "bedtime story", story["category"],
+            "animated story", "hindi moral story", "kids learning",
+            "hindi cartoon", "bachon ki kahani", "hindi kids content"
+        ]
+
+        print("Metadata generated")
         return {"title": title, "description": description, "tags": tags}
 
-# ============ STEP 9: YOUTUBE UPLOAD ============
+# ============ STEP 8: YOUTUBE UPLOAD ============
 class YouTubeUploader:
     """Upload video to YouTube"""
-    
+
     @staticmethod
-    def upload(video_file, thumbnail_file, metadata):
-        print("📤 Uploading to YouTube...")
-        
+    def upload(video_file: str, thumbnail_file: str, metadata: Dict) -> Optional[str]:
+        print("Uploading to YouTube...")
+
         try:
+            try:
+                with open("client_secret.json", "w", encoding="utf-8") as f:
+                    f.write(CONFIG["YOUTUBE_CLIENT_SECRET"])
+
+                if CONFIG["YOUTUBE_TOKEN_PICKLE_BASE64"]:
+                    token_data = base64.b64decode(CONFIG["YOUTUBE_TOKEN_PICKLE_BASE64"])
+                    with open("token.pickle", "wb") as f:
+                        f.write(token_data)
+            except Exception as e:
+                print(f"   Auth setup warning: {e}")
+
             with open("token.pickle", "rb") as f:
                 credentials = pickle.load(f)
-            
+
+            from googleapiclient.discovery import build
+            from googleapiclient.http import MediaFileUpload
+
             youtube = build("youtube", "v3", credentials=credentials)
-            
+
             body = {
                 "snippet": {
                     "title": metadata["title"][:100],
                     "description": metadata["description"][:5000],
                     "tags": metadata["tags"][:500],
-                    "categoryId": "10",  # Music
+                    "categoryId": "1",
                     "defaultLanguage": "hi",
                     "defaultAudioLanguage": "hi"
                 },
                 "status": {
                     "privacyStatus": "public",
-                    "selfDeclaredMadeForKids": False,
+                    "selfDeclaredMadeForKids": True,
                     "publishAt": None
                 }
             }
-            
-            # Upload video
-            print("  Uploading video...")
+
+            print("   Uploading video...")
             request = youtube.videos().insert(
                 part="snippet,status",
                 body=body,
                 media_body=MediaFileUpload(video_file, chunksize=-1, resumable=True)
             )
-            
+
             response = request.execute()
             video_id = response.get('id')
-            print(f"✅ Video uploaded: https://youtube.com/watch?v={video_id}")
-            
-            # Upload thumbnail
+            print(f"Video uploaded: https://youtube.com/watch?v={video_id}")
+
             if thumbnail_file and os.path.exists(thumbnail_file):
-                print("  Uploading thumbnail...")
+                print("   Uploading thumbnail...")
                 youtube.thumbnails().set(
                     videoId=video_id,
                     media_body=MediaFileUpload(thumbnail_file)
                 ).execute()
-                print("✅ Thumbnail uploaded")
-            
-            return video_id
-            
-        except Exception as e:
-            print(f"❌ Upload failed: {e}")
-            return None
+                print("Thumbnail uploaded")
 
-# ============ STEP 10: ANALYTICS TRACKING ============
+            return video_id
+
+        except Exception as e:
+            print(f"Upload failed: {e}")
+            return None
+        finally:
+            for f in ["client_secret.json", "token.pickle"]:
+                if os.path.exists(f):
+                    os.remove(f)
+
+# ============ STEP 9: ANALYTICS ============
 class AnalyticsTracker:
     """Track video performance"""
-    
+
     @staticmethod
-    def track(video_id, song):
-        print("📊 Tracking analytics...")
-        
+    def track(video_id: str, story: Dict) -> Dict:
+        print("Tracking analytics...")
+
         analytics = {
             "timestamp": datetime.now().isoformat(),
             "video_id": video_id,
-            "song": song,
+            "story": {
+                "title": story["title"],
+                "category": story["category"],
+                "moral": story["moral"]
+            },
             "platform": "youtube",
-            "metrics": {
-                "views": 0,
-                "likes": 0,
-                "comments": 0
-            }
+            "metrics": {"views": 0, "likes": 0, "comments": 0}
         }
-        
-        # Save to file
-        with open(f"{CONFIG['OUTPUT_DIR']}/analytics.json", "w") as f:
-            json.dump(analytics, f, indent=2)
-        
-        print(f"✅ Analytics tracked: {CONFIG['OUTPUT_DIR']}/analytics.json")
+
+        with open(f"{CONFIG['OUTPUT_DIR']}/analytics.json", "w", encoding="utf-8") as f:
+            json.dump(analytics, f, indent=2, ensure_ascii=False)
+
+        print("Analytics saved")
         return analytics
 
 # ============ MAIN PIPELINE ============
 def main():
     print("=" * 60)
-    print("🎵 TRENDING SONG LYRICS VIDEO GENERATOR")
+    print("HINDI KIDS STORIES VIDEO GENERATOR")
     print("=" * 60)
-    
+
     start_time = time.time()
-    
-    # Step 1: Detect Trending
-    song = TrendingDetector.detect_trending()
-    
-    # Try Spotify API first
-    spotify_song = TrendingDetector.fetch_spotify_trending()
-    if spotify_song:
-        song = spotify_song
-    
-    # Step 2: Fetch Lyrics
-    lyrics = LyricsFetcher.fetch_genius(song["title"], song["artist"])
-    if not lyrics:
-        lyrics = LyricsFetcher.fetch_mock_lyrics(song)
-    
-   lyrics_lines = [l.strip() for l in lyrics.splitlines() if l.strip()]
-# or
-lyrics_lines = [l.strip() for l in lyrics.split('\n') if l.strip()]
-    
-    # Step 3: Generate Audio
-    audio_file = AudioGenerator.generate(lyrics, "audio.mp3", song["lang"])
-    
-    # Step 4: Fetch Background Videos
-    mood_queries = {
-        "romantic": "romantic couple love sunset dance",
-        "energetic": "dance party celebration energy concert",
-        "party": "disco party lights dancing nightclub",
-        "traditional": "traditional dance folk culture festival"
-    }
-    query = mood_queries.get(song["mood"], "music concert")
-    
-    pexels_videos = VideoFetcher.search_videos(query, per_page=3)
-    
-    video_files = []
-    for i, video in enumerate(pexels_videos):
-        fname = f"{CONFIG['TEMP_DIR']}/bg_{i}.mp4"
-        if VideoFetcher.download(video["url"], fname):
-            video_files.append({"file": fname, "duration": video["duration"]})
-    
-    # Step 5: Beat Analysis
-    beats, duration = BeatAnalyzer.analyze_beats(audio_file)
-    
-    # Step 6: Render Video
-    renderer = LyricsRenderer(song, lyrics_lines, beats, duration)
-    
-    # Create background video if clips available
-    bg_video = None
-    if video_files:
-        # Concatenate
-        with open(f"{CONFIG['TEMP_DIR']}/concat.txt", "w") as f:
-            for vf in video_files:
-                f.write(f"file '{vf['file']}'\n")
-        
-        bg_video = f"{CONFIG['TEMP_DIR']}/background.mp4"
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", f"{CONFIG['TEMP_DIR']}/concat.txt",
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
-            "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
-            bg_video
-        ], check=True, capture_output=True)
-    
+
+    story = StorySelector.select_story()
+
+    audio_file = HindiTTSGenerator.generate(story["content"], "audio.mp3")
+
+    beats, duration = AudioAnalyzer.analyze(audio_file)
+
+    bg_video = BackgroundVideoFetcher.fetch(story["color_theme"], duration)
+
+    renderer = StoryVideoRenderer(story, beats, duration)
     video_file = renderer.render(bg_video)
-    
-    # Step 7: Generate Thumbnail
-    thumbnail_file = ThumbnailGenerator.generate(song, f"{CONFIG['OUTPUT_DIR']}/thumbnail.jpg")
-    
-    # Step 8: Generate Metadata
-    metadata = MetadataGenerator.generate(song, lyrics_lines)
-    
-    # Step 9: Upload to YouTube
+
+    thumbnail_file = StoryThumbnailGenerator.generate(story, f"{CONFIG['OUTPUT_DIR']}/thumbnail.jpg")
+
+    metadata = StoryMetadataGenerator.generate(story)
+
     video_id = YouTubeUploader.upload(video_file, thumbnail_file, metadata)
-    
-    # Step 10: Track Analytics
+
     if video_id:
-        AnalyticsTracker.track(video_id, song)
-    
-    # Cleanup
-    for f in ["audio.mp3", "client_secret.json", "token.pickle"]:
-        if os.path.exists(f):
-            os.remove(f)
-    
-    # Cleanup temp
+        AnalyticsTracker.track(video_id, story)
+
     if os.path.exists(CONFIG["TEMP_DIR"]):
         shutil.rmtree(CONFIG["TEMP_DIR"])
-    
+
+    if os.path.exists("audio.mp3"):
+        os.remove("audio.mp3")
+
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")
-    print(f"🎉 PIPELINE COMPLETE!")
-    print(f"⏱️ Time: {elapsed:.1f}s")
+    print(f"PIPELINE COMPLETE!")
+    print(f"Time: {elapsed:.1f}s")
     if video_id:
-        print(f"🔗 Video: https://youtube.com/watch?v={video_id}")
+        print(f"Video: https://youtube.com/watch?v={video_id}")
     print(f"{'=' * 60}")
 
 if __name__ == "__main__":
