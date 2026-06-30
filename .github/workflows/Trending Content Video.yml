@@ -1,5 +1,5 @@
 - name: Create token.pickle
-        shell: bash
+   shell: bash
         env:
           TOKEN_DATA: ${{ secrets.GCP_TOKEN_PICKLE }}
         run: |
