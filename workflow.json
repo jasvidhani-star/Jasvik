@@ -40,6 +40,4 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_TOKEN_PICKLE_BASE64: ${{ secrets.YOUTUBE_TOKEN_PICKLE_BASE64 }}
-        run: |
-          python main.py
-        continue-on-error: true  # Don't fail if upload fails
+       - run: python -c "import importlib.metadata; print('litellm:', importlib.metadata.version('litellm'))"
