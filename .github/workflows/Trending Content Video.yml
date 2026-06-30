@@ -1,15 +1,11 @@
+name: Trending Content Video
+
 on:
-push:
-- name: Create token.pickle
-   shell: bash
-        env:
-          TOKEN_DATA: ${{ secrets.GCP_TOKEN_PICKLE }}
-        run: |
-          echo "$TOKEN_DATA" | base64 --decode > token.pickle
-     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # Run every 6 hours
+    - cron: '0 */6 * * *'
 
 jobs:
   build:
@@ -34,19 +30,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify installations
+      - name: Create token.pickle
+        shell: bash
+        env:
+          TOKEN_DATA: ${{ secrets.YOUTUBE_TOKEN_PICKLE_BASE64 }}
         run: |
-          python -c "import requests; print('requests:', requests.__version__)"
-          python -c "import numpy; print('numpy:', numpy.__version__)"
-          python -c "import PIL; print('PIL:', PIL.__version__)"
-          python -c "import edge_tts; print('edge-tts: OK')"
+          echo "$TOKEN_DATA" | base64 --decode > token.pickle
 
       - name: Run video generator
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          YOUTUBE_TOKEN_PICKLE_BASE64: ${{ secrets.YOUTUBE_TOKEN_PICKLE_BASE64 }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           TIKTOK_API_KEY: ${{ secrets.TIKTOK_API_KEY }}
