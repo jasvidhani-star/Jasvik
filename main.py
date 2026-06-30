@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Universal Trending Content Video Generator
-Auto-fetches viral content from: YouTube, TikTok, Facebook, Wikipedia, Spotify, News
-Generates animated videos with Hindi TTS voice
+Trending Song Lyrics Video Generator
+Full Pipeline: Detection -> Lyrics -> Audio -> Video -> Upload -> Analytics
 """
 
 import os
@@ -18,421 +17,291 @@ import time
 import subprocess
 import shutil
 import asyncio
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from urllib.parse import quote, urlparse
 
 import requests
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # ============ CONFIGURATION ============
 CONFIG = {
     "PEXELS_API_KEY": os.environ.get("PEXELS_API_KEY", ""),
-    "YOUTUBE_API_KEY": os.environ.get("YOUTUBE_API_KEY", ""),
     "YOUTUBE_CLIENT_SECRET": os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
     "YOUTUBE_TOKEN_PICKLE_BASE64": os.environ.get("YOUTUBE_TOKEN_PICKLE_BASE64", ""),
-    "SPOTIFY_CLIENT_ID": os.environ.get("SPOTIFY_CLIENT_ID", ""),
-    "SPOTIFY_CLIENT_SECRET": os.environ.get("SPOTIFY_CLIENT_SECRET", ""),
-    "TIKTOK_API_KEY": os.environ.get("TIKTOK_API_KEY", ""),
-    "FACEBOOK_ACCESS_TOKEN": os.environ.get("FACEBOOK_ACCESS_TOKEN", ""),
-    "NEWS_API_KEY": os.environ.get("NEWS_API_KEY", ""),
-    "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
     "OUTPUT_DIR": "output",
     "TEMP_DIR": "temp",
     "FPS": 30,
     "WIDTH": 1920,
     "HEIGHT": 1080,
+    "SHORTS_WIDTH": 1080,
+    "SHORTS_HEIGHT": 1920,
 }
 
 Path(CONFIG["OUTPUT_DIR"]).mkdir(exist_ok=True)
 Path(CONFIG["TEMP_DIR"]).mkdir(exist_ok=True)
 
-# ============ CONTENT SOURCES ============
-class TrendingContentScraper:
-    """Scrape trending content from multiple platforms"""
+# ============ HINDI KIDS STORIES DATABASE ============
+STORIES = [
+    {
+        "title": "Chaalak Khargosh aur Dheemi Kachhua",
+        "title_en": "The Clever Rabbit and Slow Tortoise",
+        "moral": "Dheere aur sthir jeetate hain",
+        "category": "moral",
+        "characters": ["Khargosh", "Kachhua"],
+        "color_theme": "forest",
+        "content": """Ek samay ki baat hai, ek ghane jangal mein ek chaalak khargosh rehta tha. Vah bahut tez daud sakta tha aur hamesha apni gati par garv karta tha.
 
-    SOURCES = ["youtube", "tiktok", "facebook", "wikipedia", "spotify", "news"]
+Usi jangal mein ek dheemi kachhua bhi rehta tha. Kachhua har kaam dheere-dheere karta tha.
 
-    @classmethod
-    def fetch_trending(cls) -> Dict:
-        """Fetch trending content from all available sources"""
-        print("Fetching trending content from multiple sources...")
+Ek din khargosh ne kachhue se kaha, "Are kachhue, tum to bahut dheere ho! Kya tum kabhi daud sakte ho?"
 
-        contents = []
+Kachhua muskuraya aur bola, "Haan, main dheera hoon lekin main sthir hoon. Chalo, ek daud lagate hain."
 
-        # Try each source
-        if CONFIG["YOUTUBE_API_KEY"]:
-            try:
-                yt = cls._fetch_youtube_trending()
-                if yt:
-                    contents.append(yt)
-                    print(f"  YouTube: {yt['title'][:50]}...")
-            except Exception as e:
-                print(f"  YouTube failed: {e}")
+Khargosh hansa aur kaha, "Theek hai! Kaun pehle us pahadi tak pahunchega, vahi jeetega."
 
-        if CONFIG["TIKTOK_API_KEY"]:
-            try:
-                tt = cls._fetch_tiktok_trending()
-                if tt:
-                    contents.append(tt)
-                    print(f"  TikTok: {tt['title'][:50]}...")
-            except Exception as e:
-                print(f"  TikTok failed: {e}")
+Daud shuru hui. Khargosh tezi se aage nikal gaya. Thodi door jaakar usne peeche dekha, kachhua kahi dikhai nahi diya.
 
-        if CONFIG["FACEBOOK_ACCESS_TOKEN"]:
-            try:
-                fb = cls._fetch_facebook_trending()
-                if fb:
-                    contents.append(fb)
-                    print(f"  Facebook: {fb['title'][:50]}...")
-            except Exception as e:
-                print(f"  Facebook failed: {e}")
+Khargosh socha, "Kachhua to bahut peeche hai. Main thoda aaram kar leta hoon."
 
-        if CONFIG["SPOTIFY_CLIENT_ID"] and CONFIG["SPOTIFY_CLIENT_SECRET"]:
-            try:
-                sp = cls._fetch_spotify_trending()
-                if sp:
-                    contents.append(sp)
-                    print(f"  Spotify: {sp['title'][:50]}...")
-            except Exception as e:
-                print(f"  Spotify failed: {e}")
+Khargosh ek ped ke neeche so gaya.
 
-        if CONFIG["NEWS_API_KEY"]:
-            try:
-                news = cls._fetch_news_trending()
-                if news:
-                    contents.append(news)
-                    print(f"  News: {news['title'][:50]}...")
-            except Exception as e:
-                print(f"  News failed: {e}")
+Kachhua dheere-dheere chalta raha. Usne khargosh ko sote hue dekha lekin ruka nahi.
 
-        # Always try Wikipedia (no API key needed)
-        try:
-            wiki = cls._fetch_wikipedia_trending()
-            if wiki:
-                contents.append(wiki)
-                print(f"  Wikipedia: {wiki['title'][:50]}...")
-        except Exception as e:
-            print(f"  Wikipedia failed: {e}")
+Kachhua lagataar chalta raha aur ant mein pahadi tak pahunch gaya.
 
-        if not contents:
-            print("No online sources available, using fallback content...")
-            return cls._generate_fallback_content()
+Jab khargosh ki aankh khuli, to vah jaldi se utha aur dauda. Lekin jab vah pahuncha, kachhua pehle se hi vahan tha.
 
-        # Select best content based on engagement score
-        best = max(contents, key=lambda x: x.get("engagement_score", 0))
-        print(f"Selected: {best['source']} | {best['title']}")
-        return best
+Khargosh ne kaha, "Main haar gaya! Tum jeete kachhue."
 
-    @classmethod
-    def _fetch_youtube_trending(cls) -> Optional[Dict]:
-        """Fetch trending videos from YouTube"""
-        url = "https://www.googleapis.com/youtube/v3/videos"
-        params = {
-            "part": "snippet,statistics",
-            "chart": "mostPopular",
-            "regionCode": "IN",
-            "maxResults": 10,
-            "key": CONFIG["YOUTUBE_API_KEY"]
-        }
-        response = requests.get(url, params=params, timeout=20)
-        data = response.json()
+Kachhua bola, "Dheere aur sthir jeetate hain. Gati nahi, dridhta mayne rakhti hai."
 
-        if "items" not in data or not data["items"]:
-            return None
+Sab janwaron ne kachhue ki jeet ka jashn manaya. Khargosh ne apni ghamand chhod di.
 
-        # Pick random trending video
-        video = random.choice(data["items"])
-        snippet = video["snippet"]
-        stats = video.get("statistics", {})
+Tabhi se kahawat bani: Dheere-dheere re mana, dheere sab kuchh hoe."""
+    },
+    {
+        "title": "Laalchi Kauva aur Jutha Roti",
+        "title_en": "The Greedy Crow and the Stale Bread",
+        "moral": "Laalach buri bala hai",
+        "category": "moral",
+        "characters": ["Kauva", "Lomdi"],
+        "color_theme": "village",
+        "content": """Ek gaon mein ek kauva rehta tha. Vah bahut laalchi tha. Hamesha aur se adhik khana chahta tha.
 
-        engagement = int(stats.get("viewCount", 0)) + int(stats.get("likeCount", 0)) * 100
+Ek din use ek roti mili. Roti thodi jutthi thi lekin kaue ko bahut pasand aayi.
 
-        return {
-            "source": "youtube",
-            "title": snippet["title"],
-            "description": snippet.get("description", ""),
-            "content": snippet.get("description", snippet["title"]),
-            "tags": snippet.get("tags", []),
-            "thumbnail": snippet["thumbnails"]["high"]["url"] if "high" in snippet.get("thumbnails", {}) else "",
-            "engagement_score": engagement,
-            "url": f"https://youtube.com/watch?v={video['id']}",
-            "category": "trending",
-            "language": "hindi"
-        }
+Vah socha, "Main ise kisi ko nahi doonga. Main akele khaunga."
 
-    @classmethod
-    def _fetch_tiktok_trending(cls) -> Optional[Dict]:
-        """Fetch trending from TikTok (using unofficial API)"""
-        # Using rapidapi or similar
-        url = "https://tiktok-api6.p.rapidapi.com/trending/feed"
-        headers = {
-            "X-RapidAPI-Key": CONFIG["TIKTOK_API_KEY"],
-            "X-RapidAPI-Host": "tiktok-api6.p.rapidapi.com"
-        }
-        response = requests.get(url, headers=headers, timeout=20)
-        data = response.json()
+Kaue ne roti apni chonch mein dabai aur ek ped ki dali par baith gaya.
 
-        if not data or "data" not in data:
-            return None
+Tabhi ek chaalak lomdi vahan se guzri. Usne kaue ko roti dekhi.
 
-        item = random.choice(data["data"])
+Lomdi ne socha, "Mujhe yah roti chahiye."
 
-        return {
-            "source": "tiktok",
-            "title": item.get("title", "TikTok Trending"),
-            "description": item.get("desc", ""),
-            "content": item.get("desc", item.get("title", "")),
-            "tags": item.get("hashtags", []),
-            "thumbnail": item.get("cover", ""),
-            "engagement_score": item.get("play_count", 0) + item.get("digg_count", 0) * 10,
-            "url": item.get("share_url", ""),
-            "category": "viral",
-            "language": "hindi"
-        }
+Lomdi ne kaue se kaha, "He kaue bhai, tumhari aawaz bahut surili hai. Kya tum ek geet suna sakte ho?"
 
-    @classmethod
-    def _fetch_facebook_trending(cls) -> Optional[Dict]:
-        """Fetch trending from Facebook"""
-        url = "https://graph.facebook.com/v18.0/search"
-        params = {
-            "q": "trending india",
-            "type": "page",
-            "access_token": CONFIG["FACEBOOK_ACCESS_TOKEN"],
-            "limit": 10
-        }
-        response = requests.get(url, params=params, timeout=20)
-        data = response.json()
+Kauva khush ho gaya. Usne socha, "Lomdi meri tarif kar rahi hai. Main gata hoon."
 
-        if "data" not in data or not data["data"]:
-            return None
+Jaise hi kaue ne munh khola, roti neeche gir gayi.
 
-        page = random.choice(data["data"])
+Lomdi ne turant roti uthai aur bhaag gayi.
 
-        return {
-            "source": "facebook",
-            "title": page.get("name", "Facebook Trending"),
-            "description": page.get("about", ""),
-            "content": page.get("about", page.get("name", "")),
-            "tags": ["trending", "viral"],
-            "thumbnail": "",
-            "engagement_score": page.get("fan_count", 0),
-            "url": f"https://facebook.com/{page.get('id', '')}",
-            "category": "social",
-            "language": "hindi"
-        }
+Kauva rone laga. Use apni laalach par pachhtava hua.
 
-    @classmethod
-    def _fetch_spotify_trending(cls) -> Optional[Dict]:
-        """Fetch trending from Spotify"""
-        # Get access token
-        auth = base64.b64encode(
-            f"{CONFIG['SPOTIFY_CLIENT_ID']}:{CONFIG['SPOTIFY_CLIENT_SECRET']}".encode()
-        ).decode()
+Ek panchhi ne kaha, "Laalach buri bala hai. Jo aapke paas hai, usme santosh karo."
 
-        token_resp = requests.post(
-            "https://accounts.spotify.com/api/token",
-            headers={"Authorization": f"Basic {auth}"},
-            data={"grant_type": "client_credentials"},
-            timeout=10
-        )
-        token = token_resp.json().get("access_token")
+Kaue ne seekh li: Kabhi bhi laalchi mat bano."""
+    },
+    {
+        "title": "Bahadur Chooha aur Sher",
+        "title_en": "The Brave Mouse and the Lion",
+        "moral": "Koi bhi chhota nahi hota",
+        "category": "courage",
+        "characters": ["Chooha", "Sher"],
+        "color_theme": "jungle",
+        "content": """Ek vishal jangal mein ek sher rehta tha. Vah jangal ka raja tha. Sabhi janwar usse darte the.
 
-        # Get trending playlist
-        headers = {"Authorization": f"Bearer {token}"}
-        response = requests.get(
-            "https://api.spotify.com/v1/playlists/37i9dQZEVXbLZ52XmncU0o/tracks",
-            headers=headers,
-            params={"limit": 10},
-            timeout=10
-        )
-        data = response.json()
+Ek din sher so raha tha. Ek chhota chooha vahan se guzra.
 
-        if "items" not in data or not data["items"]:
-            return None
+Choohe ne dekha ki sher so raha hai. Vah dara hua tha lekin sher ke paas se jana zaroori tha.
 
-        track = random.choice(data["items"])["track"]
+Chooha dheere-dheere chal raha tha. Achank uska pair sher ki poonchh par pad gaya.
 
-        return {
-            "source": "spotify",
-            "title": track["name"],
-            "description": f"By {track['artists'][0]['name']}",
-            "content": f"{track['name']} by {track['artists'][0]['name']}. A trending song everyone is listening to.",
-            "tags": [track["artists"][0]["name"], "trending", "music"],
-            "thumbnail": track["album"]["images"][0]["url"] if track["album"]["images"] else "",
-            "engagement_score": track.get("popularity", 50) * 10000,
-            "url": track["external_urls"].get("spotify", ""),
-            "category": "music",
-            "language": "hindi"
-        }
+Sher jaag gaya. Usne choohe ko dekha aur gusse mein dahada.
 
-    @classmethod
-    def _fetch_news_trending(cls) -> Optional[Dict]:
-        """Fetch trending news"""
-        url = "https://newsapi.org/v2/top-headlines"
-        params = {
-            "country": "in",
-            "apiKey": CONFIG["NEWS_API_KEY"],
-            "pageSize": 10
-        }
-        response = requests.get(url, params=params, timeout=20)
-        data = response.json()
+"Tumne mujhe jagaya! Ab main tumhe kha jaunga!" sher bola.
 
-        if "articles" not in data or not data["articles"]:
-            return None
+Chooha kaanpata hua bola, "He maharaj, kripya mujhe maaf kar do. Maine jaanbujhkar nahi kiya."
 
-        article = random.choice(data["articles"])
+Sher hansa, "Tum jaise chhote choohe se mujhe kya madad milegi?"
 
-        return {
-            "source": "news",
-            "title": article["title"],
-            "description": article.get("description", ""),
-            "content": article.get("content", article.get("description", article["title"])),
-            "tags": [article.get("source", {}).get("name", "news"), "trending"],
-            "thumbnail": article.get("urlToImage", ""),
-            "engagement_score": 500000,  # News always high priority
-            "url": article["url"],
-            "category": "news",
-            "language": "hindi"
-        }
+Chooha bola, "Maharaj, chhota ho ya bada, har koi kisi na kisi kaam aa sakta hai."
+
+Sher muskuraya aur choohe ko chhod diya.
+
+Kuchh dino baad, sher ek jaal mein phans gaya. Vah bahut dahada lekin koi nahi aaya.
+
+Chooha vahan se guzra. Usne sher ko jaal mein phansa dekha.
+
+Choohe ne turant jaal kaatna shuru kiya. Dheere-dheere usne jaal kaat diya.
+
+Sher azaad ho gaya. Usne choohe ko gale lagaya.
+
+Sher bola, "Tumne meri jaan bachai. Tum sach mein bahadur ho."
+
+Chooha muskuraya, "Maine kaha tha na, koi bhi chhota nahi hota."
+
+Tabhi se sab janwar ek-doosre ka samman karne lage."""
+    },
+    {
+        "title": "Mehnati Chinti aur Aalasi Tidda",
+        "title_en": "The Hardworking Ant and Lazy Grasshopper",
+        "moral": "Mehnat ka fal meetha hota hai",
+        "category": "moral",
+        "characters": ["Chinti", "Tidda"],
+        "color_theme": "meadow",
+        "content": """Ek sundar maidan mein ek chinti ka parivar rehta tha. Ve sab bahut mehnati the.
+
+Garmiyon mein jab dhoop chamakti thi, chintiyan khane ka sangrah karti thin.
+
+Usi maidan mein ek tidda rehta tha. Vah bahut aalasi tha. Sara din gata aur nachata rehta.
+
+Chintiyon ne tidde se kaha, "Bhai, garmi mein khana ikattha kar lo. Sardi mein bhookh lagegi."
+
+Tidda hansa, "Abhi to bahut samay hai. Main baad mein kar loonga."
+
+Chintiyan din-raat mehnat karti rahin. Unhone bahut sara anaaj ikattha kiya.
+
+Tidda har roz gata, "Chhoti-chhoti chintiyan, kaam mein lagi rahati hain."
+
+Jaise hi barish ka mausam aaya, sab kuchh bheeg gaya. Phir sardi aayi.
+
+Maidan mein sab kuchh sookh gaya. Koi patta, koi dana nahi bacha.
+
+Tidda bhookha tha. Usne chintiyon ke ghar jaakar dekha, vahan anaaj bhara pada tha.
+
+Tidda sharminda hokar bola, "Mujhe maaf kar do. Maine tumhari baat nahi mani."
+
+Chintiyon ne daya dikhayi. Unhone tidde ko khana diya.
+
+Tidda ne kaha, "Maine seekh liya. Mehnat ka fal meetha hota hai."
+
+Tabhi se tidda bhi mehnati ban gaya."""
+    },
+    {
+        "title": "Chamakdaar Taare aur Andhera Aakaash",
+        "title_en": "The Shining Stars and the Dark Sky",
+        "moral": "Har andhere ke baad ujaala aata hai",
+        "category": "inspirational",
+        "characters": ["Chhota Taara", "Chaand"],
+        "color_theme": "night",
+        "content": """Aakaash mein hazaaron taare rehte the. Ve raat ko chamakate aur sabko roshni dete.
+
+Ek chhota taara tha jo bahut kamzor tha. Uski roshni bahut dhimi thi.
+
+Chhote taare ne chaand se poocha, "Main kyon itna kamzor hoon?"
+
+Chaand muskuraya, "Tum abhi chhote ho. Samay ke saath tum bhi chamakoge."
+
+Ek raat bahut baadal aa gaye. Sab taare baadalon ke peeche chhip gaye.
+
+Andhera ho gaya. Dharti par sab dar gaye.
+
+Chhote taare ne socha, "Mujhe kuchh karna hoga."
+
+Chhote taare ne apni saari taakat lagai. Dheere-dheere vah chamakne laga.
+
+Uski roshni baadalon se hokar dharti tak pahunchi.
+
+Logon ne dekha, "Wah! Ek taara chamak raha hai!"
+
+Chhote taare ki roshni se doosaron taaron ko bhi himmat mili. Ve bhi chamakne lage.
+
+Baadal hat gaye. Poora aakaash chamak utha.
+
+Chaand ne kaha, "Dekha? Har andhere ke baad ujaala aata hai."
+
+Chhota taara khush ho gaya. Usne seekha ki kabhi haar nahi manani chahiye.
+
+Tabhi se vah sabse chamakdaar taara ban gaya."""
+    }
+]
+
+# ============ COLOR THEMES FOR STORIES ============
+COLOR_THEMES = {
+    "forest": {
+        "bg": [(20, 60, 20), (10, 40, 10)],
+        "accent": (100, 255, 100),
+        "glow": (50, 255, 50),
+        "text": (255, 255, 220),
+        "highlight": (255, 255, 150),
+        "particle_colors": [(100, 255, 100), (50, 200, 50), (150, 255, 150)],
+    },
+    "village": {
+        "bg": [(60, 40, 20), (40, 25, 10)],
+        "accent": (255, 200, 100),
+        "glow": (255, 150, 50),
+        "text": (255, 240, 200),
+        "highlight": (255, 220, 150),
+        "particle_colors": [(255, 200, 100), (200, 150, 50), (255, 180, 80)],
+    },
+    "jungle": {
+        "bg": [(10, 50, 20), (5, 35, 15)],
+        "accent": (255, 180, 50),
+        "glow": (255, 150, 0),
+        "text": (255, 250, 200),
+        "highlight": (255, 220, 100),
+        "particle_colors": [(255, 200, 50), (200, 150, 30), (255, 180, 60)],
+    },
+    "meadow": {
+        "bg": [(40, 60, 20), (25, 45, 10)],
+        "accent": (200, 255, 100),
+        "glow": (150, 255, 50),
+        "text": (240, 255, 220),
+        "highlight": (220, 255, 150),
+        "particle_colors": [(200, 255, 100), (150, 220, 50), (180, 255, 80)],
+    },
+    "night": {
+        "bg": [(10, 10, 40), (5, 5, 25)],
+        "accent": (150, 200, 255),
+        "glow": (100, 150, 255),
+        "text": (220, 230, 255),
+        "highlight": (180, 200, 255),
+        "particle_colors": [(150, 200, 255), (100, 150, 255), (200, 220, 255)],
+    },
+}
+
+# ============ STEP 1: STORY SELECTION ============
+class StorySelector:
+    """Select a story from the database"""
 
     @classmethod
-    def _fetch_wikipedia_trending(cls) -> Optional[Dict]:
-        """Fetch trending Wikipedia article"""
-        # Get trending pages
-        url = "https://en.wikipedia.org/api/rest_v1/feed/featured/" + datetime.now().strftime("%Y/%m/%d")
-        response = requests.get(url, timeout=20)
-        data = response.json()
+    def select_story(cls, category: Optional[str] = None) -> Dict:
+        """Select a story, optionally by category"""
+        if category:
+            stories = [s for s in STORIES if s["category"] == category]
+            if not stories:
+                stories = STORIES
+        else:
+            stories = STORIES
 
-        # Try to get "most read" or "tfa" (today's featured article)
-        article = None
-        if "tfa" in data:
-            article = data["tfa"]
-        elif "mostread" in data and data["mostread"]:
-            article = random.choice(data["mostread"][:5])
-
-        if not article:
-            # Fallback: random article
-            response = requests.get(
-                "https://en.wikipedia.org/api/rest_v1/page/random/summary",
-                timeout=20
-            )
-            article = response.json()
-
-        title = article.get("titles", {}).get("normalized", article.get("title", "Wikipedia"))
-        extract = article.get("extract", article.get("description", title))
-
-        return {
-            "source": "wikipedia",
-            "title": title,
-            "description": extract[:200],
-            "content": extract,
-            "tags": ["knowledge", "trending", "wikipedia"],
-            "thumbnail": article.get("thumbnail", {}).get("source", ""),
-            "engagement_score": 100000,
-            "url": article.get("content_urls", {}).get("desktop", {}).get("page", f"https://en.wikipedia.org/wiki/{quote(title)}"),
-            "category": "knowledge",
-            "language": "hindi"
-        }
+        selected = random.choice(stories)
+        print(f"Story Selected: {selected['title']}")
+        print(f"   Category: {selected['category']}")
+        print(f"   Moral: {selected['moral']}")
+        print(f"   Characters: {', '.join(selected['characters'])}")
+        return selected
 
     @classmethod
-    def _generate_fallback_content(cls) -> Dict:
-        """Generate content when no APIs available"""
-        fallbacks = [
-            {
-                "title": "AI Technology Revolution 2026",
-                "content": "Artificial Intelligence is transforming every industry. From healthcare to education, AI is making life easier. Machine learning models can now predict diseases before symptoms appear. Self-driving cars are becoming safer every day. The future is here.",
-                "category": "technology"
-            },
-            {
-                "title": "Space Exploration: Mars Mission",
-                "content": "Humanity's next giant leap is Mars. Scientists are working on sustainable habitats for the red planet. New rocket technology will make the journey faster than ever before. The dream of becoming a multi-planetary species is closer than we think.",
-                "category": "science"
-            },
-            {
-                "title": "Climate Change Solutions",
-                "content": "Renewable energy is the key to our future. Solar panels are becoming more efficient and affordable. Wind farms are powering entire cities. Electric vehicles are replacing gas cars. Together, we can save our planet for future generations.",
-                "category": "environment"
-            },
-            {
-                "title": "Healthy Living Tips",
-                "content": "Exercise daily for at least 30 minutes. Eat fresh fruits and vegetables. Drink plenty of water. Get 8 hours of sleep. Practice meditation for mental peace. Small changes in daily habits can lead to a healthier, happier life.",
-                "category": "health"
-            }
-        ]
+    def list_stories(cls) -> List[Dict]:
+        """List all available stories"""
+        return [{"title": s["title"], "category": s["category"], "moral": s["moral"]} for s in STORIES]
 
-        selected = random.choice(fallbacks)
-        return {
-            "source": "fallback",
-            "title": selected["title"],
-            "description": selected["content"][:200],
-            "content": selected["content"],
-            "tags": [selected["category"], "trending"],
-            "thumbnail": "",
-            "engagement_score": 1000,
-            "url": "",
-            "category": selected["category"],
-            "language": "hindi"
-        }
-
-# ============ HINDI TRANSLATION ============
-class HindiTranslator:
-    """Translate content to Hindi using free APIs"""
-
-    @staticmethod
-    def translate(text: str) -> str:
-        """Translate English text to Hindi"""
-        print("Translating to Hindi...")
-
-        # Try Google Translate API (free tier)
-        try:
-            url = "https://translate.googleapis.com/translate_a/single"
-            params = {
-                "client": "gtx",
-                "sl": "en",
-                "tl": "hi",
-                "dt": "t",
-                "q": text[:5000]  # Limit length
-            }
-            response = requests.get(url, params=params, timeout=30)
-            data = response.json()
-
-            if data and len(data) > 0 and len(data[0]) > 0:
-                translated = "".join([item[0] for item in data[0] if item[0]])
-                if translated and len(translated) > 10:
-                    print("Translation successful")
-                    return translated
-        except Exception as e:
-            print(f"Google Translate failed: {e}")
-
-        # Try MyMemory API
-        try:
-            url = "https://api.mymemory.translated.net/get"
-            params = {
-                "q": text[:500],
-                "langpair": "en|hi"
-            }
-            response = requests.get(url, params=params, timeout=20)
-            data = response.json()
-
-            if data.get("responseStatus") == 200:
-                translated = data.get("responseData", {}).get("translatedText", "")
-                if translated and len(translated) > 10:
-                    print("MyMemory translation successful")
-                    return translated
-        except Exception as e:
-            print(f"MyMemory failed: {e}")
-
-        # Fallback: return original with note
-        print("Translation failed, using original text")
-        return text
-
-# ============ HINDI TTS ============
+# ============ STEP 2: HINDI TTS AUDIO GENERATION ============
 class HindiTTSGenerator:
-    """Generate Hindi audio"""
+    """Generate Hindi audio using edge-tts with kid-friendly voices"""
 
     HINDI_VOICES = [
         "hi-IN-SwaraNeural",
@@ -441,10 +310,13 @@ class HindiTTSGenerator:
     ]
 
     @classmethod
-    def generate(cls, text: str, output_file: str = "audio.mp3") -> str:
+    def generate(cls, text: str, output_file: str = "audio.mp3", voice: Optional[str] = None) -> str:
+        """Generate Hindi audio with edge-tts"""
         print("Generating Hindi audio...")
 
-        voice = random.choice(cls.HINDI_VOICES)
+        if not voice:
+            voice = random.choice(cls.HINDI_VOICES)
+
         print(f"   Voice: {voice}")
 
         try:
@@ -452,33 +324,43 @@ class HindiTTSGenerator:
 
             async def _generate():
                 communicate = edge_tts.Communicate(
-                    text, voice, rate="-5%", pitch="+5Hz", volume="+10%"
+                    text, 
+                    voice, 
+                    rate="-5%",
+                    pitch="+5Hz",
+                    volume="+10%"
                 )
                 await communicate.save(output_file)
 
             asyncio.run(_generate())
 
             if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
-                print(f"Audio: {output_file}")
+                print(f"Audio generated: {output_file}")
                 return output_file
+
         except Exception as e:
             print(f"edge-tts failed: {e}")
 
+        print("   Falling back to gTTS...")
         try:
             from gtts import gTTS
             tts = gTTS(text=text, lang='hi', slow=False)
             tts.save(output_file)
-            print(f"Audio (gTTS): {output_file}")
+            print(f"Audio generated (gTTS fallback): {output_file}")
             return output_file
         except Exception as e:
-            print(f"gTTS failed: {e}")
+            print(f"gTTS also failed: {e}")
             raise
 
-# ============ AUDIO ANALYSIS ============
+# ============ STEP 3: AUDIO ANALYSIS ============
 class AudioAnalyzer:
+    """Analyze audio for duration and simple beat patterns"""
+
     @staticmethod
     def analyze(audio_file: str) -> Tuple[List[float], float]:
+        """Get audio duration and create word-timing beats"""
         print("Analyzing audio...")
+
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -487,42 +369,51 @@ class AudioAnalyzer:
             )
             info = json.loads(result.stdout)
             duration = float(info["format"]["duration"])
+
             beats = [i * 2.0 for i in range(int(duration / 2.0) + 1)]
-            print(f"Duration: {duration:.1f}s")
+
+            print(f"Duration: {duration:.1f}s, Beats: {len(beats)}")
             return beats, duration
+
         except Exception as e:
             print(f"Analysis failed: {e}")
-            return [i * 2.0 for i in range(60)], 120
+            duration = 120
+            beats = [i * 2.0 for i in range(60)]
+            return beats, duration
 
-# ============ BACKGROUND VIDEO ============
+# ============ STEP 4: BACKGROUND VIDEO FETCH ============
 class BackgroundVideoFetcher:
+    """Fetch kid-friendly background videos from Pexels"""
+
     THEME_QUERIES = {
-        "technology": "technology futuristic digital animation",
-        "science": "space galaxy stars universe animation",
-        "environment": "nature green earth environment",
-        "health": "healthy lifestyle fitness nature",
-        "music": "music concert lights party",
-        "news": "news broadcast breaking",
-        "social": "social media people city",
-        "viral": "trending viral popular",
-        "knowledge": "education learning books",
-        "trending": "trending popular viral",
+        "forest": "forest animals nature kids cartoon",
+        "village": "village india countryside kids",
+        "jungle": "jungle animals lion elephant kids",
+        "meadow": "meadow flowers butterflies kids nature",
+        "night": "night sky stars moon kids dreamy",
     }
 
     @classmethod
-    def fetch(cls, category: str, duration: float) -> Optional[str]:
+    def fetch(cls, theme: str, duration: float) -> Optional[str]:
+        """Fetch and prepare background video"""
         print("Fetching background video...")
 
         if not CONFIG["PEXELS_API_KEY"]:
-            print("No Pexels key, using gradient")
+            print("No Pexels API key, using animated gradient background")
             return None
 
-        query = cls.THEME_QUERIES.get(category, "abstract colorful animation")
+        query = cls.THEME_QUERIES.get(theme, "kids animated nature")
 
         try:
             url = "https://api.pexels.com/videos/search"
             headers = {"Authorization": CONFIG["PEXELS_API_KEY"]}
-            params = {"query": query, "per_page": 3, "orientation": "landscape", "size": "large"}
+            params = {
+                "query": query,
+                "per_page": 3,
+                "orientation": "landscape",
+                "size": "large"
+            }
+
             response = requests.get(url, headers=headers, params=params, timeout=30)
             data = response.json()
 
@@ -531,15 +422,20 @@ class BackgroundVideoFetcher:
                 for video in data["videos"]:
                     for file in video.get("video_files", []):
                         if file.get("file_type") == "video/mp4" and file.get("width", 0) >= 1280:
-                            videos.append({"url": file["link"], "duration": video.get("duration", 15)})
+                            videos.append({
+                                "url": file["link"],
+                                "duration": video.get("duration", 15)
+                            })
                             break
 
             if not videos:
+                print("No videos found, using animated gradient")
                 return None
 
             video_files = []
             for i, v in enumerate(videos[:2]):
                 fname = f"{CONFIG['TEMP_DIR']}/bg_{i}.mp4"
+                print(f"   Downloading video {i+1}...")
                 r = requests.get(v["url"], stream=True, timeout=60)
                 with open(fname, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
@@ -559,6 +455,7 @@ class BackgroundVideoFetcher:
                     "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
                     bg_file
                 ], check=True, capture_output=True)
+
                 return bg_file
             elif video_files:
                 bg_file = f"{CONFIG['TEMP_DIR']}/background.mp4"
@@ -569,44 +466,34 @@ class BackgroundVideoFetcher:
                     bg_file
                 ], check=True, capture_output=True)
                 return bg_file
+
         except Exception as e:
             print(f"Video fetch failed: {e}")
 
         return None
 
-# ============ COLOR THEMES ============
-COLOR_THEMES = {
-    "technology": {"bg": [(10, 20, 40), (5, 10, 25)], "accent": (0, 200, 255), "text": (220, 240, 255)},
-    "science": {"bg": [(5, 5, 30), (2, 2, 15)], "accent": (150, 100, 255), "text": (230, 220, 255)},
-    "environment": {"bg": [(10, 40, 15), (5, 25, 10)], "accent": (100, 255, 100), "text": (220, 255, 220)},
-    "health": {"bg": [(40, 20, 20), (25, 10, 10)], "accent": (255, 100, 100), "text": (255, 220, 220)},
-    "music": {"bg": [(30, 10, 30), (15, 5, 15)], "accent": (255, 50, 200), "text": (255, 200, 240)},
-    "news": {"bg": [(20, 20, 40), (10, 10, 25)], "accent": (255, 200, 50), "text": (255, 240, 200)},
-    "social": {"bg": [(20, 30, 50), (10, 15, 30)], "accent": (50, 150, 255), "text": (200, 220, 255)},
-    "viral": {"bg": [(40, 20, 10), (25, 10, 5)], "accent": (255, 150, 50), "text": (255, 230, 200)},
-    "knowledge": {"bg": [(20, 30, 20), (10, 20, 10)], "accent": (200, 255, 100), "text": (240, 255, 220)},
-    "trending": {"bg": [(30, 15, 30), (15, 5, 15)], "accent": (255, 100, 150), "text": (255, 220, 230)},
-}
+# ============ STEP 5: STORY VIDEO RENDERER ============
+class StoryVideoRenderer:
+    """Render animated story video with word-by-word highlighting"""
 
-# ============ VIDEO RENDERER ============
-class VideoRenderer:
-    def __init__(self, content: Dict, beats: List[float], duration: float):
-        self.content = content
+    def __init__(self, story: Dict, beats: List[float], duration: float):
+        self.story = story
         self.beats = beats
         self.duration = duration
-        self.colors = COLOR_THEMES.get(content["category"], COLOR_THEMES["trending"])
+        self.colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
         self.W, self.H = CONFIG["WIDTH"], CONFIG["HEIGHT"]
         self.fps = CONFIG["FPS"]
         self.total_frames = int(duration * self.fps)
 
-        text = content.get("content", content["title"])
-        self.sentences = [s.strip() for s in re.split(r'[.!?\n]', text) if s.strip()]
+        self.sentences = [s.strip() for s in story["content"].split("\n") if s.strip()]
         self.words = []
         self._build_word_timings()
 
     def _build_word_timings(self):
+        """Calculate timing for each word"""
         all_text = " ".join(self.sentences)
         words = all_text.split()
+
         if not words:
             return
 
@@ -614,10 +501,10 @@ class VideoRenderer:
         current_time = 0
 
         for word in words:
-            clean = re.sub(r'[^\w\s]', '', word).strip()
-            if clean:
+            clean_word = re.sub(r'[^\w\s]', '', word).strip()
+            if clean_word:
                 self.words.append({
-                    "word": clean,
+                    "word": clean_word,
                     "start_time": current_time,
                     "end_time": current_time + time_per_word,
                     "duration": time_per_word
@@ -625,21 +512,26 @@ class VideoRenderer:
                 current_time += time_per_word
 
     def _get_current_word(self, t: float) -> Optional[Dict]:
+        """Get the word at current time"""
         for wd in self.words:
             if wd["start_time"] <= t < wd["end_time"]:
                 return wd
         return None
 
     def _get_beat_pulse(self, t: float) -> float:
+        """Get visual pulse intensity at time t"""
         nearest = min(self.beats, key=lambda x: abs(x - t))
-        return max(0, 1 - abs(nearest - t) * 3)
+        distance = abs(nearest - t)
+        return max(0, 1 - distance * 3)
 
     def _create_background(self, frame_num: int, bg_frames: Optional[List] = None) -> Image.Image:
+        """Create animated background"""
         if bg_frames and frame_num < len(bg_frames):
             return Image.fromarray(bg_frames[frame_num]).convert("RGB")
 
         img = Image.new('RGB', (self.W, self.H), self.colors["bg"][0])
         draw = ImageDraw.Draw(img)
+
         progress = frame_num / max(self.total_frames, 1)
 
         for y in range(self.H):
@@ -653,17 +545,15 @@ class VideoRenderer:
             x = int((self.W * (i / 50) + frame_num * 2) % self.W)
             y = int((self.H * 0.3 * (i % 7) + frame_num * 1.5) % self.H)
             size = int(3 + 5 * abs(math.sin(progress * 6 + i)))
-            color = (
-                min(255, self.colors["accent"][0] + random.randint(-30, 30)),
-                min(255, self.colors["accent"][1] + random.randint(-30, 30)),
-                min(255, self.colors["accent"][2] + random.randint(-30, 30))
-            )
+            color = random.choice(self.colors["particle_colors"])
             draw.ellipse([x, y, x+size, y+size], fill=color)
 
         return img
 
     def render_frame(self, frame_num: int, bg_frames: Optional[List] = None) -> np.ndarray:
+        """Render a single frame"""
         t = frame_num / self.fps
+
         img = self._create_background(frame_num, bg_frames)
         draw = ImageDraw.Draw(img)
 
@@ -672,38 +562,29 @@ class VideoRenderer:
 
         try:
             title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-            content_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
+            story_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
             word_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
             small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-            source_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
         except:
             title_font = ImageFont.load_default()
-            content_font = ImageFont.load_default()
+            story_font = ImageFont.load_default()
             word_font = ImageFont.load_default()
             small_font = ImageFont.load_default()
-            source_font = ImageFont.load_default()
+            moral_font = ImageFont.load_default()
 
-        # Title bar
         draw.rectangle([0, 0, self.W, 100], fill=(0, 0, 0, 200))
-        title = f"{self.content['title']}"
+        title = f"{self.story['title']}"
         bbox = draw.textbbox((0, 0), title, font=title_font)
         tw = bbox[2] - bbox[0]
         draw.text(((self.W - tw) // 2, 30), title, fill=(255, 255, 255), font=title_font)
 
-        # Source badge
-        source_text = f"Source: {self.content['source'].upper()}"
-        bbox = draw.textbbox((0, 0), source_text, font=source_font)
-        tw = bbox[2] - bbox[0]
-        draw.rectangle([self.W - tw - 30, 110, self.W - 20, 145], fill=self.colors["accent"])
-        draw.text((self.W - tw - 20, 115), source_text, fill=(0, 0, 0), font=source_font)
-
-        # Current sentence with word highlighting
-        if current_word and self.sentences:
+        if current_word:
             all_text = " ".join(self.sentences)
             all_words = all_text.split()
 
             word_count = 0
-            current_sentence = self.sentences[0]
+            current_sentence = self.sentences[0] if self.sentences else ""
             for sent in self.sentences:
                 sent_words = sent.split()
                 if word_count <= len([w for w in self.words if w["start_time"] <= t]) < word_count + len(sent_words):
@@ -733,9 +614,9 @@ class VideoRenderer:
                     if is_active:
                         pulse = beat_pulse
                         color = (
-                            min(255, self.colors["accent"][0] + int(pulse * 60)),
-                            min(255, self.colors["accent"][1] + int(pulse * 60)),
-                            min(255, self.colors["accent"][2] + int(pulse * 60))
+                            min(255, self.colors["highlight"][0] + int(pulse * 60)),
+                            min(255, self.colors["highlight"][1] + int(pulse * 60)),
+                            min(255, self.colors["highlight"][2] + int(pulse * 60))
                         )
                         for glow in range(4, 0, -1):
                             draw.text((x, y), word, 
@@ -749,7 +630,6 @@ class VideoRenderer:
 
                 y += 85
 
-            # Previous sentence
             prev_sent_idx = -1
             wc = 0
             for idx, sent in enumerate(self.sentences):
@@ -768,7 +648,6 @@ class VideoRenderer:
                     draw.text(((self.W - tw) // 2, y), line, fill=(130, 130, 130), font=small_font)
                     y += 40
 
-            # Next sentence
             next_sent_idx = -1
             wc = 0
             for idx, sent in enumerate(self.sentences):
@@ -787,27 +666,32 @@ class VideoRenderer:
                     draw.text(((self.W - tw) // 2, y), line, fill=(180, 180, 180), font=small_font)
                     y += 40
 
-        # Visualizer
+        if t > self.duration * 0.8:
+            moral_alpha = min(255, int((t - self.duration * 0.8) / (self.duration * 0.2) * 255))
+            moral_text = f"Seekh: {self.story['moral']}"
+            bbox = draw.textbbox((0, 0), moral_text, font=moral_font)
+            tw = bbox[2] - bbox[0]
+            draw.rectangle([self.W*0.1, self.H-120, self.W*0.9, self.H-60], 
+                          fill=(0, 0, 0, moral_alpha))
+            draw.text(((self.W - tw) // 2, self.H - 105), moral_text, 
+                     fill=(255, 255, 200), font=moral_font)
+
         bar_count = 40
         bar_width = self.W * 0.8 / bar_count
         for i in range(bar_count):
             bar_h = int(12 + beat_pulse * 35 * (0.5 + 0.5 * math.sin(i * 0.6 + t * 8)))
             x = self.W * 0.1 + i * bar_width
             y = self.H - 45 - bar_h
-            color = (
-                min(255, self.colors["accent"][0] + random.randint(-20, 20)),
-                min(255, self.colors["accent"][1] + random.randint(-20, 20)),
-                min(255, self.colors["accent"][2] + random.randint(-20, 20))
-            )
-            draw.rounded_rectangle([x, y, x + bar_width - 3, self.H - 45], radius=3, fill=color)
+            color = random.choice(self.colors["particle_colors"])
+            draw.rounded_rectangle([x, y, x + bar_width - 3, self.H - 45], 
+                                    radius=3, fill=color)
 
-        # Progress bar
         progress = t / self.duration
         bar_width = int(self.W * 0.8 * progress)
         draw.rectangle([self.W*0.1, self.H-20, self.W*0.9, self.H-15], fill=(50, 50, 50))
-        draw.rectangle([self.W*0.1, self.H-20, self.W*0.1 + bar_width, self.H-15], fill=self.colors["accent"])
+        draw.rectangle([self.W*0.1, self.H-20, self.W*0.1 + bar_width, self.H-15], 
+                      fill=self.colors["accent"])
 
-        # Time
         time_str = f"{int(t//60):02d}:{int(t%60):02d}"
         bbox = draw.textbbox((0, 0), time_str, font=small_font)
         tw = bbox[2] - bbox[0]
@@ -816,12 +700,15 @@ class VideoRenderer:
         return np.array(img)
 
     def render(self, bg_video: Optional[str] = None) -> str:
+        """Render complete video"""
         print(f"Rendering {self.total_frames} frames...")
 
         bg_frames = []
         if bg_video and os.path.exists(bg_video):
+            print("   Extracting background frames...")
             frame_dir = f"{CONFIG['TEMP_DIR']}/bg_frames"
             Path(frame_dir).mkdir(exist_ok=True)
+
             subprocess.run([
                 "ffmpeg", "-y", "-i", bg_video,
                 "-vf", f"fps={self.fps},scale={self.W}:{self.H}",
@@ -844,11 +731,13 @@ class VideoRenderer:
         for i in range(self.total_frames):
             frame = self.render_frame(i, bg_frames if i < len(bg_frames) else None)
             Image.fromarray(frame).save(f"{output_dir}/frame_{i:05d}.png")
+
             if i % 60 == 0:
                 print(f"   Frame {i}/{self.total_frames}")
 
         print("Compiling video...")
-        output_file = f"{CONFIG['OUTPUT_DIR']}/video.mp4"
+        output_file = f"{CONFIG['OUTPUT_DIR']}/story_video.mp4"
+
         subprocess.run([
             "ffmpeg", "-y", "-framerate", str(self.fps),
             "-i", f"{output_dir}/frame_%05d.png",
@@ -859,17 +748,20 @@ class VideoRenderer:
         ], check=True, capture_output=True)
 
         shutil.rmtree(output_dir)
+
         print(f"Video: {output_file}")
         return output_file
 
-# ============ THUMBNAIL GENERATOR ============
-class ThumbnailGenerator:
+# ============ STEP 6: THUMBNAIL GENERATION ============
+class StoryThumbnailGenerator:
+    """Generate kid-friendly YouTube thumbnail"""
+
     @staticmethod
-    def generate(content: Dict, output_file: str = "thumbnail.jpg") -> str:
+    def generate(story: Dict, output_file: str = "thumbnail.jpg") -> str:
         print("Generating thumbnail...")
 
         W, H = 1280, 720
-        colors = COLOR_THEMES.get(content["category"], COLOR_THEMES["trending"])
+        colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
         c1, c2 = colors["bg"][0], colors["bg"][1]
 
         img = Image.new('RGB', (W, H), c1)
@@ -886,81 +778,96 @@ class ThumbnailGenerator:
             x = random.randint(0, W)
             y = random.randint(0, H)
             size = random.randint(10, 60)
-            color = colors["accent"]
+            color = random.choice(colors["particle_colors"])
             draw.ellipse([x, y, x+size, y+size], fill=color)
 
         try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 80)
-            source_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
-            tag_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
+            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            tag_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
         except:
             title_font = ImageFont.load_default()
-            source_font = ImageFont.load_default()
+            moral_font = ImageFont.load_default()
             tag_font = ImageFont.load_default()
 
-        title = content["title"]
-        lines = textwrap.wrap(title, width=18)
+        title = story["title"]
+        lines = textwrap.wrap(title, width=15)
         y = 150
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=title_font)
             tw = bbox[2] - bbox[0]
             draw.text(((W - tw) // 2 + 4, y + 4), line, fill=(0, 0, 0), font=title_font)
             draw.text(((W - tw) // 2, y), line, fill=(255, 255, 255), font=title_font)
-            y += 100
+            y += 105
 
-        source = f"Source: {content['source'].upper()}"
-        bbox = draw.textbbox((0, 0), source, font=source_font)
+        moral = f"{story['moral']}"
+        bbox = draw.textbbox((0, 0), moral, font=moral_font)
         tw = bbox[2] - bbox[0]
-        draw.text(((W - tw) // 2, 400), source, fill=(255, 255, 200), font=source_font)
+        draw.text(((W - tw) // 2, 420), moral, fill=(255, 255, 200), font=moral_font)
 
-        tag = f"#{content['category'].upper()} #TRENDING #HINDI"
+        tag = f"#{story['category'].upper()} #HINDI #KIDS #STORY"
         bbox = draw.textbbox((0, 0), tag, font=tag_font)
         tw = bbox[2] - bbox[0]
-        draw.rectangle([(W - tw) // 2 - 20, 500, (W + tw) // 2 + 20, 550], fill=(0, 0, 0, 180))
-        draw.text(((W - tw) // 2, 510), tag, fill=(255, 255, 100), font=tag_font)
+        draw.rectangle([(W - tw) // 2 - 20, 520, (W + tw) // 2 + 20, 570], fill=(0, 0, 0, 180))
+        draw.text(((W - tw) // 2, 530), tag, fill=(255, 255, 100), font=tag_font)
 
-        draw.rounded_rectangle([50, 50, 300, 110], radius=10, fill=(255, 0, 0), outline=(255, 255, 255), width=3)
-        draw.text((70, 60), "TRENDING", fill=(255, 255, 255), font=tag_font)
+        draw.rounded_rectangle([50, 50, 280, 110], radius=10, fill=(255, 100, 100), outline=(255, 255, 255), width=3)
+        draw.text((70, 60), "KIDS STORY", fill=(255, 255, 255), font=tag_font)
+
+        draw.rounded_rectangle([W-280, 50, W-50, 110], radius=10, fill=(100, 200, 100), outline=(255, 255, 255), width=3)
+        draw.text((W-260, 60), "HINDI", fill=(255, 255, 255), font=tag_font)
 
         img.save(output_file)
         print(f"Thumbnail: {output_file}")
         return output_file
 
-# ============ METADATA GENERATOR ============
-class MetadataGenerator:
+# ============ STEP 7: METADATA GENERATION ============
+class StoryMetadataGenerator:
+    """Generate YouTube metadata for kids stories"""
+
     @staticmethod
-    def generate(content: Dict) -> Dict:
+    def generate(story: Dict) -> Dict:
         print("Generating metadata...")
 
-        title = f"{content['title']} | Trending {content['source'].title()} | Hindi"
+        title_templates = [
+            f"{story['title']} | Hindi Kids Story | Moral Story",
+            f"{story['title']} | Animated Hindi Story for Children",
+            f"Hindi Kahani: {story['title']} | Kids Moral Story",
+        ]
+        title = random.choice(title_templates)
 
-        desc = f"""{content['title']}
+        description = f"""{story['title']}
 
-Source: {content['source'].title()}
-Category: {content['category'].capitalize()}
+{story['title_en']}
 
-{content.get('description', '')}
+Moral: {story['moral']}
+Category: {story['category'].capitalize()}
+Characters: {', '.join(story['characters'])}
+
+Enjoy this beautiful Hindi moral story for kids!
 
 Features:
-- Auto-fetched trending content
-- Hindi voice narration
-- Animated word highlighting
-- Professional editing
+- Animated Text with Word Highlighting
+- Kid-Friendly Visuals
+- Clear Hindi Voice
+- Moral Learning
 
-Original URL: {content.get('url', 'N/A')}
-
-#Trending #Hindi #Viral #{content['source']} #{content['category']}"""
+#HindiStories #KidsStories #MoralStories #HindiKahani #ChildrenStories #BedtimeStories"""
 
         tags = [
-            content["title"], "trending", "hindi", content["source"],
-            content["category"], "viral", "news", "music", "technology"
-        ] + content.get("tags", [])
+            story["title"], "hindi story", "kids story", "moral story",
+            "hindi kahani", "children story", "bedtime story", story["category"],
+            "animated story", "hindi moral story", "kids learning",
+            "hindi cartoon", "bachon ki kahani", "hindi kids content"
+        ]
 
         print("Metadata generated")
-        return {"title": title, "description": desc, "tags": list(set(tags))[:15]}
+        return {"title": title, "description": description, "tags": tags}
 
-# ============ YOUTUBE UPLOADER ============
+# ============ STEP 8: YOUTUBE UPLOAD ============
 class YouTubeUploader:
+    """Upload video to YouTube"""
+
     @staticmethod
     def upload(video_file: str, thumbnail_file: str, metadata: Dict) -> Optional[str]:
         print("Uploading to YouTube...")
@@ -975,7 +882,7 @@ class YouTubeUploader:
                     with open("token.pickle", "wb") as f:
                         f.write(token_data)
             except Exception as e:
-                print(f"Auth setup warning: {e}")
+                print(f"   Auth setup warning: {e}")
 
             with open("token.pickle", "rb") as f:
                 credentials = pickle.load(f)
@@ -990,18 +897,18 @@ class YouTubeUploader:
                     "title": metadata["title"][:100],
                     "description": metadata["description"][:5000],
                     "tags": metadata["tags"][:500],
-                    "categoryId": "24",  # Entertainment
+                    "categoryId": "1",
                     "defaultLanguage": "hi",
                     "defaultAudioLanguage": "hi"
                 },
                 "status": {
                     "privacyStatus": "public",
-                    "selfDeclaredMadeForKids": False,
+                    "selfDeclaredMadeForKids": True,
                     "publishAt": None
                 }
             }
 
-            print("Uploading video...")
+            print("   Uploading video...")
             request = youtube.videos().insert(
                 part="snippet,status",
                 body=body,
@@ -1013,7 +920,7 @@ class YouTubeUploader:
             print(f"Video uploaded: https://youtube.com/watch?v={video_id}")
 
             if thumbnail_file and os.path.exists(thumbnail_file):
-                print("Uploading thumbnail...")
+                print("   Uploading thumbnail...")
                 youtube.thumbnails().set(
                     videoId=video_id,
                     media_body=MediaFileUpload(thumbnail_file)
@@ -1030,47 +937,63 @@ class YouTubeUploader:
                 if os.path.exists(f):
                     os.remove(f)
 
-# ============ MAIN ============
+# ============ STEP 9: ANALYTICS ============
+class AnalyticsTracker:
+    """Track video performance"""
+
+    @staticmethod
+    def track(video_id: str, story: Dict) -> Dict:
+        print("Tracking analytics...")
+
+        analytics = {
+            "timestamp": datetime.now().isoformat(),
+            "video_id": video_id,
+            "story": {
+                "title": story["title"],
+                "category": story["category"],
+                "moral": story["moral"]
+            },
+            "platform": "youtube",
+            "metrics": {"views": 0, "likes": 0, "comments": 0}
+        }
+
+        with open(f"{CONFIG['OUTPUT_DIR']}/analytics.json", "w", encoding="utf-8") as f:
+            json.dump(analytics, f, indent=2, ensure_ascii=False)
+
+        print("Analytics saved")
+        return analytics
+
+# ============ MAIN PIPELINE ============
 def main():
     print("=" * 60)
-    print("UNIVERSAL TRENDING CONTENT VIDEO GENERATOR")
-    print("Sources: YouTube, TikTok, Facebook, Spotify, Wikipedia, News")
+    print("HINDI KIDS STORIES VIDEO GENERATOR")
     print("=" * 60)
 
     start_time = time.time()
 
-    # Step 1: Fetch trending content
-    content = TrendingContentScraper.fetch_trending()
+    story = StorySelector.select_story()
 
-    # Step 2: Translate to Hindi
-    hindi_text = HindiTranslator.translate(content["content"])
-    content["hindi_content"] = hindi_text
+    audio_file = HindiTTSGenerator.generate(story["content"], "audio.mp3")
 
-    # Step 3: Generate Hindi Audio
-    audio_file = HindiTTSGenerator.generate(hindi_text, "audio.mp3")
-
-    # Step 4: Analyze Audio
     beats, duration = AudioAnalyzer.analyze(audio_file)
 
-    # Step 5: Fetch Background Video
-    bg_video = BackgroundVideoFetcher.fetch(content["category"], duration)
+    bg_video = BackgroundVideoFetcher.fetch(story["color_theme"], duration)
 
-    # Step 6: Render Video
-    renderer = VideoRenderer(content, beats, duration)
+    renderer = StoryVideoRenderer(story, beats, duration)
     video_file = renderer.render(bg_video)
 
-    # Step 7: Generate Thumbnail
-    thumbnail_file = ThumbnailGenerator.generate(content, f"{CONFIG['OUTPUT_DIR']}/thumbnail.jpg")
+    thumbnail_file = StoryThumbnailGenerator.generate(story, f"{CONFIG['OUTPUT_DIR']}/thumbnail.jpg")
 
-    # Step 8: Generate Metadata
-    metadata = MetadataGenerator.generate(content)
+    metadata = StoryMetadataGenerator.generate(story)
 
-    # Step 9: Upload to YouTube
     video_id = YouTubeUploader.upload(video_file, thumbnail_file, metadata)
 
-    # Cleanup
+    if video_id:
+        AnalyticsTracker.track(video_id, story)
+
     if os.path.exists(CONFIG["TEMP_DIR"]):
         shutil.rmtree(CONFIG["TEMP_DIR"])
+
     if os.path.exists("audio.mp3"):
         os.remove("audio.mp3")
 
