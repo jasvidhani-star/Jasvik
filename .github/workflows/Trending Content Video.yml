@@ -2,6 +2,15 @@ name: Trending Content Video
 
 on:
   push:
+- name: Create output directory
+        run: mkdir -p output
+
+      - name: Run video generator
+        env:
+          # ... baki ke saare environment variables wese hi rahenge
+        run: |
+          python main.py
+
     branches: [main]
   workflow_dispatch:
   schedule:
