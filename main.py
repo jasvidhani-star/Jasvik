@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 Trending Song Lyrics Video Generator
 Full Pipeline: Detection → Lyrics → Audio → Video → Upload → Analytics
 """
@@ -965,8 +965,9 @@ def main():
     if not lyrics:
         lyrics = LyricsFetcher.fetch_mock_lyrics(song)
     
-    lyrics_lines = [l.strip() for l in lyrics.split('\n') if l.strip()]
-    print(f"📜 Total lines: {len(lyrics_lines)}")
+   lyrics_lines = [l.strip() for l in lyrics.splitlines() if l.strip()]
+# or
+lyrics_lines = [l.strip() for l in lyrics.split('\n') if l.strip()]
     
     # Step 3: Generate Audio
     audio_file = AudioGenerator.generate(lyrics, "audio.mp3", song["lang"])
