@@ -1,12 +1,12 @@
+on:
+push:
 - name: Create token.pickle
    shell: bash
         env:
           TOKEN_DATA: ${{ secrets.GCP_TOKEN_PICKLE }}
         run: |
           echo "$TOKEN_DATA" | base64 --decode > token.pickle
-on:
-  push:
-    branches: [main]
+     branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'  # Run every 6 hours
