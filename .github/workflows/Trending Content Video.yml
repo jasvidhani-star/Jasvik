@@ -2,12 +2,25 @@ name: Trending Content Video
 
 on:
   push:
-- name: Create output directory
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create output directory
         run: mkdir -p output
 
       - name: Run video generator
         env:
-          # ... baki ke saare environment variables wese hi rahenge
+          # Yahan apne saare env variables add karein
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          # ... baki variables
         run: |
           python main.py
 
