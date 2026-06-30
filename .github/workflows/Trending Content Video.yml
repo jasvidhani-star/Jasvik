@@ -1,5 +1,9 @@
-name: Build Trending Content Video
-
+- name: Create token.pickle
+        shell: bash
+        env:
+          TOKEN_DATA: ${{ secrets.GCP_TOKEN_PICKLE }}
+        run: |
+          echo "$TOKEN_DATA" | base64 --decode > token.pickle
 on:
   push:
     branches: [main]
