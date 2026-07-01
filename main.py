@@ -1,1009 +1,2449 @@
-#!/usr/bin/env python3
-"""
-Trending Song Lyrics Video Generator
-Full Pipeline: Detection -> Lyrics -> Audio -> Video -> Upload -> Analytics
-"""
-
-import os
-import sys
-import json
-import base64
-import pickle
-import random
-import textwrap
-import math
-import re
-import time
-import subprocess
-import shutil
-import asyncio
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional
-
-import requests
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-
-# ============ CONFIGURATION ============
-CONFIG = {
-    "PEXELS_API_KEY": os.environ.get("PEXELS_API_KEY", ""),
-    "YOUTUBE_CLIENT_SECRET": os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
-    "YOUTUBE_TOKEN_PICKLE_BASE64": os.environ.get("YOUTUBE_TOKEN_PICKLE_BASE64", ""),
-    "OUTPUT_DIR": "output",
-    "TEMP_DIR": "temp",
-    "FPS": 30,
-    "WIDTH": 1920,
-    "HEIGHT": 1080,
-    "SHORTS_WIDTH": 1080,
-    "SHORTS_HEIGHT": 1920,
-}
-
-Path(CONFIG["OUTPUT_DIR"]).mkdir(exist_ok=True)
-Path(CONFIG["TEMP_DIR"]).mkdir(exist_ok=True)
-
-# ============ HINDI KIDS STORIES DATABASE ============
-STORIES = [
-    {
-        "title": "Chaalak Khargosh aur Dheemi Kachhua",
-        "title_en": "The Clever Rabbit and Slow Tortoise",
-        "moral": "Dheere aur sthir jeetate hain",
-        "category": "moral",
-        "characters": ["Khargosh", "Kachhua"],
-        "color_theme": "forest",
-        "content": """Ek samay ki baat hai, ek ghane jangal mein ek chaalak khargosh rehta tha. Vah bahut tez daud sakta tha aur hamesha apni gati par garv karta tha.
-
-Usi jangal mein ek dheemi kachhua bhi rehta tha. Kachhua har kaam dheere-dheere karta tha.
-
-Ek din khargosh ne kachhue se kaha, "Are kachhue, tum to bahut dheere ho! Kya tum kabhi daud sakte ho?"
-
-Kachhua muskuraya aur bola, "Haan, main dheera hoon lekin main sthir hoon. Chalo, ek daud lagate hain."
-
-Khargosh hansa aur kaha, "Theek hai! Kaun pehle us pahadi tak pahunchega, vahi jeetega."
-
-Daud shuru hui. Khargosh tezi se aage nikal gaya. Thodi door jaakar usne peeche dekha, kachhua kahi dikhai nahi diya.
-
-Khargosh socha, "Kachhua to bahut peeche hai. Main thoda aaram kar leta hoon."
-
-Khargosh ek ped ke neeche so gaya.
-
-Kachhua dheere-dheere chalta raha. Usne khargosh ko sote hue dekha lekin ruka nahi.
-
-Kachhua lagataar chalta raha aur ant mein pahadi tak pahunch gaya.
-
-Jab khargosh ki aankh khuli, to vah jaldi se utha aur dauda. Lekin jab vah pahuncha, kachhua pehle se hi vahan tha.
-
-Khargosh ne kaha, "Main haar gaya! Tum jeete kachhue."
-
-Kachhua bola, "Dheere aur sthir jeetate hain. Gati nahi, dridhta mayne rakhti hai."
-
-Sab janwaron ne kachhue ki jeet ka jashn manaya. Khargosh ne apni ghamand chhod di.
-
-Tabhi se kahawat bani: Dheere-dheere re mana, dheere sab kuchh hoe."""
-    },
-    {
-        "title": "Laalchi Kauva aur Jutha Roti",
-        "title_en": "The Greedy Crow and the Stale Bread",
-        "moral": "Laalach buri bala hai",
-        "category": "moral",
-        "characters": ["Kauva", "Lomdi"],
-        "color_theme": "village",
-        "content": """Ek gaon mein ek kauva rehta tha. Vah bahut laalchi tha. Hamesha aur se adhik khana chahta tha.
-
-Ek din use ek roti mili. Roti thodi jutthi thi lekin kaue ko bahut pasand aayi.
-
-Vah socha, "Main ise kisi ko nahi doonga. Main akele khaunga."
-
-Kaue ne roti apni chonch mein dabai aur ek ped ki dali par baith gaya.
-
-Tabhi ek chaalak lomdi vahan se guzri. Usne kaue ko roti dekhi.
-
-Lomdi ne socha, "Mujhe yah roti chahiye."
-
-Lomdi ne kaue se kaha, "He kaue bhai, tumhari aawaz bahut surili hai. Kya tum ek geet suna sakte ho?"
-
-Kauva khush ho gaya. Usne socha, "Lomdi meri tarif kar rahi hai. Main gata hoon."
-
-Jaise hi kaue ne munh khola, roti neeche gir gayi.
-
-Lomdi ne turant roti uthai aur bhaag gayi.
-
-Kauva rone laga. Use apni laalach par pachhtava hua.
-
-Ek panchhi ne kaha, "Laalach buri bala hai. Jo aapke paas hai, usme santosh karo."
-
-Kaue ne seekh li: Kabhi bhi laalchi mat bano."""
-    },
-    {
-        "title": "Bahadur Chooha aur Sher",
-        "title_en": "The Brave Mouse and the Lion",
-        "moral": "Koi bhi chhota nahi hota",
-        "category": "courage",
-        "characters": ["Chooha", "Sher"],
-        "color_theme": "jungle",
-        "content": """Ek vishal jangal mein ek sher rehta tha. Vah jangal ka raja tha. Sabhi janwar usse darte the.
-
-Ek din sher so raha tha. Ek chhota chooha vahan se guzra.
-
-Choohe ne dekha ki sher so raha hai. Vah dara hua tha lekin sher ke paas se jana zaroori tha.
-
-Chooha dheere-dheere chal raha tha. Achank uska pair sher ki poonchh par pad gaya.
-
-Sher jaag gaya. Usne choohe ko dekha aur gusse mein dahada.
-
-"Tumne mujhe jagaya! Ab main tumhe kha jaunga!" sher bola.
-
-Chooha kaanpata hua bola, "He maharaj, kripya mujhe maaf kar do. Maine jaanbujhkar nahi kiya."
-
-Sher hansa, "Tum jaise chhote choohe se mujhe kya madad milegi?"
-
-Chooha bola, "Maharaj, chhota ho ya bada, har koi kisi na kisi kaam aa sakta hai."
-
-Sher muskuraya aur choohe ko chhod diya.
-
-Kuchh dino baad, sher ek jaal mein phans gaya. Vah bahut dahada lekin koi nahi aaya.
-
-Chooha vahan se guzra. Usne sher ko jaal mein phansa dekha.
-
-Choohe ne turant jaal kaatna shuru kiya. Dheere-dheere usne jaal kaat diya.
-
-Sher azaad ho gaya. Usne choohe ko gale lagaya.
-
-Sher bola, "Tumne meri jaan bachai. Tum sach mein bahadur ho."
-
-Chooha muskuraya, "Maine kaha tha na, koi bhi chhota nahi hota."
-
-Tabhi se sab janwar ek-doosre ka samman karne lage."""
-    },
-    {
-        "title": "Mehnati Chinti aur Aalasi Tidda",
-        "title_en": "The Hardworking Ant and Lazy Grasshopper",
-        "moral": "Mehnat ka fal meetha hota hai",
-        "category": "moral",
-        "characters": ["Chinti", "Tidda"],
-        "color_theme": "meadow",
-        "content": """Ek sundar maidan mein ek chinti ka parivar rehta tha. Ve sab bahut mehnati the.
-
-Garmiyon mein jab dhoop chamakti thi, chintiyan khane ka sangrah karti thin.
-
-Usi maidan mein ek tidda rehta tha. Vah bahut aalasi tha. Sara din gata aur nachata rehta.
-
-Chintiyon ne tidde se kaha, "Bhai, garmi mein khana ikattha kar lo. Sardi mein bhookh lagegi."
-
-Tidda hansa, "Abhi to bahut samay hai. Main baad mein kar loonga."
-
-Chintiyan din-raat mehnat karti rahin. Unhone bahut sara anaaj ikattha kiya.
-
-Tidda har roz gata, "Chhoti-chhoti chintiyan, kaam mein lagi rahati hain."
-
-Jaise hi barish ka mausam aaya, sab kuchh bheeg gaya. Phir sardi aayi.
-
-Maidan mein sab kuchh sookh gaya. Koi patta, koi dana nahi bacha.
-
-Tidda bhookha tha. Usne chintiyon ke ghar jaakar dekha, vahan anaaj bhara pada tha.
-
-Tidda sharminda hokar bola, "Mujhe maaf kar do. Maine tumhari baat nahi mani."
-
-Chintiyon ne daya dikhayi. Unhone tidde ko khana diya.
-
-Tidda ne kaha, "Maine seekh liya. Mehnat ka fal meetha hota hai."
-
-Tabhi se tidda bhi mehnati ban gaya."""
-    },
-    {
-        "title": "Chamakdaar Taare aur Andhera Aakaash",
-        "title_en": "The Shining Stars and the Dark Sky",
-        "moral": "Har andhere ke baad ujaala aata hai",
-        "category": "inspirational",
-        "characters": ["Chhota Taara", "Chaand"],
-        "color_theme": "night",
-        "content": """Aakaash mein hazaaron taare rehte the. Ve raat ko chamakate aur sabko roshni dete.
-
-Ek chhota taara tha jo bahut kamzor tha. Uski roshni bahut dhimi thi.
-
-Chhote taare ne chaand se poocha, "Main kyon itna kamzor hoon?"
-
-Chaand muskuraya, "Tum abhi chhote ho. Samay ke saath tum bhi chamakoge."
-
-Ek raat bahut baadal aa gaye. Sab taare baadalon ke peeche chhip gaye.
-
-Andhera ho gaya. Dharti par sab dar gaye.
-
-Chhote taare ne socha, "Mujhe kuchh karna hoga."
-
-Chhote taare ne apni saari taakat lagai. Dheere-dheere vah chamakne laga.
-
-Uski roshni baadalon se hokar dharti tak pahunchi.
-
-Logon ne dekha, "Wah! Ek taara chamak raha hai!"
-
-Chhote taare ki roshni se doosaron taaron ko bhi himmat mili. Ve bhi chamakne lage.
-
-Baadal hat gaye. Poora aakaash chamak utha.
-
-Chaand ne kaha, "Dekha? Har andhere ke baad ujaala aata hai."
-
-Chhota taara khush ho gaya. Usne seekha ki kabhi haar nahi manani chahiye.
-
-Tabhi se vah sabse chamakdaar taara ban gaya."""
-    }
-]
-
-# ============ COLOR THEMES FOR STORIES ============
-COLOR_THEMES = {
-    "forest": {
-        "bg": [(20, 60, 20), (10, 40, 10)],
-        "accent": (100, 255, 100),
-        "glow": (50, 255, 50),
-        "text": (255, 255, 220),
-        "highlight": (255, 255, 150),
-        "particle_colors": [(100, 255, 100), (50, 200, 50), (150, 255, 150)],
-    },
-    "village": {
-        "bg": [(60, 40, 20), (40, 25, 10)],
-        "accent": (255, 200, 100),
-        "glow": (255, 150, 50),
-        "text": (255, 240, 200),
-        "highlight": (255, 220, 150),
-        "particle_colors": [(255, 200, 100), (200, 150, 50), (255, 180, 80)],
-    },
-    "jungle": {
-        "bg": [(10, 50, 20), (5, 35, 15)],
-        "accent": (255, 180, 50),
-        "glow": (255, 150, 0),
-        "text": (255, 250, 200),
-        "highlight": (255, 220, 100),
-        "particle_colors": [(255, 200, 50), (200, 150, 30), (255, 180, 60)],
-    },
-    "meadow": {
-        "bg": [(40, 60, 20), (25, 45, 10)],
-        "accent": (200, 255, 100),
-        "glow": (150, 255, 50),
-        "text": (240, 255, 220),
-        "highlight": (220, 255, 150),
-        "particle_colors": [(200, 255, 100), (150, 220, 50), (180, 255, 80)],
-    },
-    "night": {
-        "bg": [(10, 10, 40), (5, 5, 25)],
-        "accent": (150, 200, 255),
-        "glow": (100, 150, 255),
-        "text": (220, 230, 255),
-        "highlight": (180, 200, 255),
-        "particle_colors": [(150, 200, 255), (100, 150, 255), (200, 220, 255)],
-    },
-}
-
-# ============ STEP 1: STORY SELECTION ============
-class StorySelector:
-    """Select a story from the database"""
-
-    @classmethod
-    def select_story(cls, category: Optional[str] = None) -> Dict:
-        """Select a story, optionally by category"""
-        if category:
-            stories = [s for s in STORIES if s["category"] == category]
-            if not stories:
-                stories = STORIES
-        else:
-            stories = STORIES
-
-        selected = random.choice(stories)
-        print(f"Story Selected: {selected['title']}")
-        print(f"   Category: {selected['category']}")
-        print(f"   Moral: {selected['moral']}")
-        print(f"   Characters: {', '.join(selected['characters'])}")
-        return selected
-
-    @classmethod
-    def list_stories(cls) -> List[Dict]:
-        """List all available stories"""
-        return [{"title": s["title"], "category": s["category"], "moral": s["moral"]} for s in STORIES]
-
-# ============ STEP 2: HINDI TTS AUDIO GENERATION ============
-class HindiTTSGenerator:
-    """Generate Hindi audio using edge-tts with kid-friendly voices"""
-
-    HINDI_VOICES = [
-        "hi-IN-SwaraNeural",
-        "hi-IN-MadhurNeural",
-        "hi-IN-AaravNeural",
-    ]
-
-    @classmethod
-    def generate(cls, text: str, output_file: str = "audio.mp3", voice: Optional[str] = None) -> str:
-        """Generate Hindi audio with edge-tts"""
-        print("Generating Hindi audio...")
-
-        if not voice:
-            voice = random.choice(cls.HINDI_VOICES)
-
-        print(f"   Voice: {voice}")
-
-        try:
-            import edge_tts
-
-            async def _generate():
-                communicate = edge_tts.Communicate(
-                    text, 
-                    voice, 
-                    rate="-5%",
-                    pitch="+5Hz",
-                    volume="+10%"
-                )
-                await communicate.save(output_file)
-
-            asyncio.run(_generate())
-
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
-                print(f"Audio generated: {output_file}")
-                return output_file
-
-        except Exception as e:
-            print(f"edge-tts failed: {e}")
-
-        print("   Falling back to gTTS...")
-        try:
-            from gtts import gTTS
-            tts = gTTS(text=text, lang='hi', slow=False)
-            tts.save(output_file)
-            print(f"Audio generated (gTTS fallback): {output_file}")
-            return output_file
-        except Exception as e:
-            print(f"gTTS also failed: {e}")
-            raise
-
-# ============ STEP 3: AUDIO ANALYSIS ============
-class AudioAnalyzer:
-    """Analyze audio for duration and simple beat patterns"""
-
-    @staticmethod
-    def analyze(audio_file: str) -> Tuple[List[float], float]:
-        """Get audio duration and create word-timing beats"""
-        print("Analyzing audio...")
-
-        try:
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "json", audio_file],
-                capture_output=True, text=True, timeout=10
-            )
-            info = json.loads(result.stdout)
-            duration = float(info["format"]["duration"])
-
-            beats = [i * 2.0 for i in range(int(duration / 2.0) + 1)]
-
-            print(f"Duration: {duration:.1f}s, Beats: {len(beats)}")
-            return beats, duration
-
-        except Exception as e:
-            print(f"Analysis failed: {e}")
-            duration = 120
-            beats = [i * 2.0 for i in range(60)]
-            return beats, duration
-
-# ============ STEP 4: BACKGROUND VIDEO FETCH ============
-class BackgroundVideoFetcher:
-    """Fetch kid-friendly background videos from Pexels"""
-
-    THEME_QUERIES = {
-        "forest": "forest animals nature kids cartoon",
-        "village": "village india countryside kids",
-        "jungle": "jungle animals lion elephant kids",
-        "meadow": "meadow flowers butterflies kids nature",
-        "night": "night sky stars moon kids dreamy",
-    }
-
-    @classmethod
-    def fetch(cls, theme: str, duration: float) -> Optional[str]:
-        """Fetch and prepare background video"""
-        print("Fetching background video...")
-
-        if not CONFIG["PEXELS_API_KEY"]:
-            print("No Pexels API key, using animated gradient background")
-            return None
-
-        query = cls.THEME_QUERIES.get(theme, "kids animated nature")
-
-        try:
-            url = "https://api.pexels.com/videos/search"
-            headers = {"Authorization": CONFIG["PEXELS_API_KEY"]}
-            params = {
-                "query": query,
-                "per_page": 3,
-                "orientation": "landscape",
-                "size": "large"
-            }
-
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            data = response.json()
-
-            videos = []
-            if "videos" in data:
-                for video in data["videos"]:
-                    for file in video.get("video_files", []):
-                        if file.get("file_type") == "video/mp4" and file.get("width", 0) >= 1280:
-                            videos.append({
-                                "url": file["link"],
-                                "duration": video.get("duration", 15)
-                            })
-                            break
-
-            if not videos:
-                print("No videos found, using animated gradient")
-                return None
-
-            video_files = []
-            for i, v in enumerate(videos[:2]):
-                fname = f"{CONFIG['TEMP_DIR']}/bg_{i}.mp4"
-                print(f"   Downloading video {i+1}...")
-                r = requests.get(v["url"], stream=True, timeout=60)
-                with open(fname, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                video_files.append({"file": fname, "duration": v["duration"]})
-
-            if len(video_files) > 1:
-                with open(f"{CONFIG['TEMP_DIR']}/concat.txt", "w") as f:
-                    for vf in video_files:
-                        f.write(f"file '{vf['file']}'\n")
-
-                bg_file = f"{CONFIG['TEMP_DIR']}/background.mp4"
-                subprocess.run([
-                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                    "-i", f"{CONFIG['TEMP_DIR']}/concat.txt",
-                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
-                    "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
-                    bg_file
-                ], check=True, capture_output=True)
-
-                return bg_file
-            elif video_files:
-                bg_file = f"{CONFIG['TEMP_DIR']}/background.mp4"
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", video_files[0]["file"],
-                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
-                    "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "fast",
-                    bg_file
-                ], check=True, capture_output=True)
-                return bg_file
-
-        except Exception as e:
-            print(f"Video fetch failed: {e}")
-
-        return None
-
-# ============ STEP 5: STORY VIDEO RENDERER ============
-class StoryVideoRenderer:
-    """Render animated story video with word-by-word highlighting"""
-
-    def __init__(self, story: Dict, beats: List[float], duration: float):
-        self.story = story
-        self.beats = beats
-        self.duration = duration
-        self.colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
-        self.W, self.H = CONFIG["WIDTH"], CONFIG["HEIGHT"]
-        self.fps = CONFIG["FPS"]
-        self.total_frames = int(duration * self.fps)
-
-        self.sentences = [s.strip() for s in story["content"].split("\n") if s.strip()]
-        self.words = []
-        self._build_word_timings()
-
-    def _build_word_timings(self):
-        """Calculate timing for each word"""
-        all_text = " ".join(self.sentences)
-        words = all_text.split()
-
-        if not words:
-            return
-
-        time_per_word = self.duration / len(words)
-        current_time = 0
-
-        for word in words:
-            clean_word = re.sub(r'[^\w\s]', '', word).strip()
-            if clean_word:
-                self.words.append({
-                    "word": clean_word,
-                    "start_time": current_time,
-                    "end_time": current_time + time_per_word,
-                    "duration": time_per_word
-                })
-                current_time += time_per_word
-
-    def _get_current_word(self, t: float) -> Optional[Dict]:
-        """Get the word at current time"""
-        for wd in self.words:
-            if wd["start_time"] <= t < wd["end_time"]:
-                return wd
-        return None
-
-    def _get_beat_pulse(self, t: float) -> float:
-        """Get visual pulse intensity at time t"""
-        nearest = min(self.beats, key=lambda x: abs(x - t))
-        distance = abs(nearest - t)
-        return max(0, 1 - distance * 3)
-
-    def _create_background(self, frame_num: int, bg_frames: Optional[List] = None) -> Image.Image:
-        """Create animated background"""
-        if bg_frames and frame_num < len(bg_frames):
-            return Image.fromarray(bg_frames[frame_num]).convert("RGB")
-
-        img = Image.new('RGB', (self.W, self.H), self.colors["bg"][0])
-        draw = ImageDraw.Draw(img)
-
-        progress = frame_num / max(self.total_frames, 1)
-
-        for y in range(self.H):
-            ratio = y / self.H
-            r = int(self.colors["bg"][0][0] + (self.colors["bg"][1][0] - self.colors["bg"][0][0]) * ratio)
-            g = int(self.colors["bg"][0][1] + (self.colors["bg"][1][1] - self.colors["bg"][0][1]) * ratio)
-            b = int(self.colors["bg"][0][2] + (self.colors["bg"][1][2] - self.colors["bg"][0][2]) * ratio)
-            draw.line([(0, y), (self.W, y)], fill=(r, g, b))
-
-        for i in range(50):
-            x = int((self.W * (i / 50) + frame_num * 2) % self.W)
-            y = int((self.H * 0.3 * (i % 7) + frame_num * 1.5) % self.H)
-            size = int(3 + 5 * abs(math.sin(progress * 6 + i)))
-            color = random.choice(self.colors["particle_colors"])
-            draw.ellipse([x, y, x+size, y+size], fill=color)
-
-        return img
-
-    def render_frame(self, frame_num: int, bg_frames: Optional[List] = None) -> np.ndarray:
-        """Render a single frame"""
-        t = frame_num / self.fps
-
-        img = self._create_background(frame_num, bg_frames)
-        draw = ImageDraw.Draw(img)
-
-        beat_pulse = self._get_beat_pulse(t)
-        current_word = self._get_current_word(t)
-
-        try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-            story_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
-            word_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
-            small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-        except:
-            title_font = ImageFont.load_default()
-            story_font = ImageFont.load_default()
-            word_font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
-            moral_font = ImageFont.load_default()
-
-        draw.rectangle([0, 0, self.W, 100], fill=(0, 0, 0, 200))
-        title = f"{self.story['title']}"
-        bbox = draw.textbbox((0, 0), title, font=title_font)
-        tw = bbox[2] - bbox[0]
-        draw.text(((self.W - tw) // 2, 30), title, fill=(255, 255, 255), font=title_font)
-
-        if current_word:
-            all_text = " ".join(self.sentences)
-            all_words = all_text.split()
-
-            word_count = 0
-            current_sentence = self.sentences[0] if self.sentences else ""
-            for sent in self.sentences:
-                sent_words = sent.split()
-                if word_count <= len([w for w in self.words if w["start_time"] <= t]) < word_count + len(sent_words):
-                    current_sentence = sent
-                    break
-                word_count += len(sent_words)
-
-            lines = textwrap.wrap(current_sentence, width=35)
-            y = 280
-            for line in lines:
-                words = line.split()
-                x_start = self.W // 2
-                total_width = 0
-                word_widths = []
-                for word in words:
-                    bbox = draw.textbbox((0, 0), word + " ", font=word_font)
-                    w = bbox[2] - bbox[0]
-                    word_widths.append(w)
-                    total_width += w
-
-                x = x_start - total_width // 2
-
-                for i, word in enumerate(words):
-                    clean = re.sub(r'[^\w\s]', '', word).strip()
-                    is_active = current_word and clean.lower() == current_word["word"].lower()
-
-                    if is_active:
-                        pulse = beat_pulse
-                        color = (
-                            min(255, self.colors["highlight"][0] + int(pulse * 60)),
-                            min(255, self.colors["highlight"][1] + int(pulse * 60)),
-                            min(255, self.colors["highlight"][2] + int(pulse * 60))
-                        )
-                        for glow in range(4, 0, -1):
-                            draw.text((x, y), word, 
-                                     fill=(color[0]//glow, color[1]//glow, color[2]//glow), 
-                                     font=word_font)
-                    else:
-                        color = self.colors["text"]
-
-                    draw.text((x, y), word, fill=color, font=word_font)
-                    x += word_widths[i]
-
-                y += 85
-
-            prev_sent_idx = -1
-            wc = 0
-            for idx, sent in enumerate(self.sentences):
-                sw = sent.split()
-                if wc + len(sw) > len([w for w in self.words if w["start_time"] <= t]):
-                    prev_sent_idx = idx - 1
-                    break
-                wc += len(sw)
-
-            if prev_sent_idx >= 0:
-                prev_lines = textwrap.wrap(self.sentences[prev_sent_idx], width=40)
-                y = 180
-                for line in prev_lines:
-                    bbox = draw.textbbox((0, 0), line, font=small_font)
-                    tw = bbox[2] - bbox[0]
-                    draw.text(((self.W - tw) // 2, y), line, fill=(130, 130, 130), font=small_font)
-                    y += 40
-
-            next_sent_idx = -1
-            wc = 0
-            for idx, sent in enumerate(self.sentences):
-                sw = sent.split()
-                if wc + len(sw) > len([w for w in self.words if w["start_time"] <= t]):
-                    next_sent_idx = idx + 1
-                    break
-                wc += len(sw)
-
-            if 0 <= next_sent_idx < len(self.sentences):
-                next_lines = textwrap.wrap(self.sentences[next_sent_idx], width=40)
-                y = 550
-                for line in next_lines:
-                    bbox = draw.textbbox((0, 0), line, font=small_font)
-                    tw = bbox[2] - bbox[0]
-                    draw.text(((self.W - tw) // 2, y), line, fill=(180, 180, 180), font=small_font)
-                    y += 40
-
-        if t > self.duration * 0.8:
-            moral_alpha = min(255, int((t - self.duration * 0.8) / (self.duration * 0.2) * 255))
-            moral_text = f"Seekh: {self.story['moral']}"
-            bbox = draw.textbbox((0, 0), moral_text, font=moral_font)
-            tw = bbox[2] - bbox[0]
-            draw.rectangle([self.W*0.1, self.H-120, self.W*0.9, self.H-60], 
-                          fill=(0, 0, 0, moral_alpha))
-            draw.text(((self.W - tw) // 2, self.H - 105), moral_text, 
-                     fill=(255, 255, 200), font=moral_font)
-
-        bar_count = 40
-        bar_width = self.W * 0.8 / bar_count
-        for i in range(bar_count):
-            bar_h = int(12 + beat_pulse * 35 * (0.5 + 0.5 * math.sin(i * 0.6 + t * 8)))
-            x = self.W * 0.1 + i * bar_width
-            y = self.H - 45 - bar_h
-            color = random.choice(self.colors["particle_colors"])
-            draw.rounded_rectangle([x, y, x + bar_width - 3, self.H - 45], 
-                                    radius=3, fill=color)
-
-        progress = t / self.duration
-        bar_width = int(self.W * 0.8 * progress)
-        draw.rectangle([self.W*0.1, self.H-20, self.W*0.9, self.H-15], fill=(50, 50, 50))
-        draw.rectangle([self.W*0.1, self.H-20, self.W*0.1 + bar_width, self.H-15], 
-                      fill=self.colors["accent"])
-
-        time_str = f"{int(t//60):02d}:{int(t%60):02d}"
-        bbox = draw.textbbox((0, 0), time_str, font=small_font)
-        tw = bbox[2] - bbox[0]
-        draw.text((self.W - tw - 60, self.H - 50), time_str, fill=(255, 255, 255), font=small_font)
-
-        return np.array(img)
-
-    def render(self, bg_video: Optional[str] = None) -> str:
-        """Render complete video"""
-        print(f"Rendering {self.total_frames} frames...")
-
-        bg_frames = []
-        if bg_video and os.path.exists(bg_video):
-            print("   Extracting background frames...")
-            frame_dir = f"{CONFIG['TEMP_DIR']}/bg_frames"
-            Path(frame_dir).mkdir(exist_ok=True)
-
-            subprocess.run([
-                "ffmpeg", "-y", "-i", bg_video,
-                "-vf", f"fps={self.fps},scale={self.W}:{self.H}",
-                "-q:v", "2", f"{frame_dir}/frame_%05d.jpg"
-            ], check=True, capture_output=True)
-
-            for f in sorted(os.listdir(frame_dir)):
-                if f.endswith('.jpg'):
-                    img = Image.open(f"{frame_dir}/{f}").convert("RGB")
-                    bg_frames.append(np.array(img))
-
-            while len(bg_frames) < self.total_frames:
-                bg_frames.extend(bg_frames[:min(len(bg_frames), self.total_frames - len(bg_frames))])
-
-            shutil.rmtree(frame_dir)
-
-        output_dir = f"{CONFIG['TEMP_DIR']}/frames"
-        Path(output_dir).mkdir(exist_ok=True)
-
-        for i in range(self.total_frames):
-            frame = self.render_frame(i, bg_frames if i < len(bg_frames) else None)
-            Image.fromarray(frame).save(f"{output_dir}/frame_{i:05d}.png")
-
-            if i % 60 == 0:
-                print(f"   Frame {i}/{self.total_frames}")
-
-        print("Compiling video...")
-        output_file = f"{CONFIG['OUTPUT_DIR']}/story_video.mp4"
-
-        subprocess.run([
-            "ffmpeg", "-y", "-framerate", str(self.fps),
-            "-i", f"{output_dir}/frame_%05d.png",
-            "-i", "audio.mp3",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "192k",
-            "-shortest", output_file
-        ], check=True, capture_output=True)
-
-        shutil.rmtree(output_dir)
-
-        print(f"Video: {output_file}")
-        return output_file
-
-# ============ STEP 6: THUMBNAIL GENERATION ============
-class StoryThumbnailGenerator:
-    """Generate kid-friendly YouTube thumbnail"""
-
-    @staticmethod
-    def generate(story: Dict, output_file: str = "thumbnail.jpg") -> str:
-        print("Generating thumbnail...")
-
-        W, H = 1280, 720
-        colors = COLOR_THEMES.get(story["color_theme"], COLOR_THEMES["forest"])
-        c1, c2 = colors["bg"][0], colors["bg"][1]
-
-        img = Image.new('RGB', (W, H), c1)
-        draw = ImageDraw.Draw(img)
-
-        for y in range(H):
-            ratio = y / H
-            r = int(c1[0] + (c2[0] - c1[0]) * ratio)
-            g = int(c1[1] + (c2[1] - c1[1]) * ratio)
-            b = int(c1[2] + (c2[2] - c1[2]) * ratio)
-            draw.line([(0, y), (W, y)], fill=(r, g, b))
-
-        for _ in range(30):
-            x = random.randint(0, W)
-            y = random.randint(0, H)
-            size = random.randint(10, 60)
-            color = random.choice(colors["particle_colors"])
-            draw.ellipse([x, y, x+size, y+size], fill=color)
-
-        try:
-            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
-            moral_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-            tag_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
-        except:
-            title_font = ImageFont.load_default()
-            moral_font = ImageFont.load_default()
-            tag_font = ImageFont.load_default()
-
-        title = story["title"]
-        lines = textwrap.wrap(title, width=15)
-        y = 150
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=title_font)
-            tw = bbox[2] - bbox[0]
-            draw.text(((W - tw) // 2 + 4, y + 4), line, fill=(0, 0, 0), font=title_font)
-            draw.text(((W - tw) // 2, y), line, fill=(255, 255, 255), font=title_font)
-            y += 105
-
-        moral = f"{story['moral']}"
-        bbox = draw.textbbox((0, 0), moral, font=moral_font)
-        tw = bbox[2] - bbox[0]
-        draw.text(((W - tw) // 2, 420), moral, fill=(255, 255, 200), font=moral_font)
-
-        tag = f"#{story['category'].upper()} #HINDI #KIDS #STORY"
-        bbox = draw.textbbox((0, 0), tag, font=tag_font)
-        tw = bbox[2] - bbox[0]
-        draw.rectangle([(W - tw) // 2 - 20, 520, (W + tw) // 2 + 20, 570], fill=(0, 0, 0, 180))
-        draw.text(((W - tw) // 2, 530), tag, fill=(255, 255, 100), font=tag_font)
-
-        draw.rounded_rectangle([50, 50, 280, 110], radius=10, fill=(255, 100, 100), outline=(255, 255, 255), width=3)
-        draw.text((70, 60), "KIDS STORY", fill=(255, 255, 255), font=tag_font)
-
-        draw.rounded_rectangle([W-280, 50, W-50, 110], radius=10, fill=(100, 200, 100), outline=(255, 255, 255), width=3)
-        draw.text((W-260, 60), "HINDI", fill=(255, 255, 255), font=tag_font)
-
-        img.save(output_file)
-        print(f"Thumbnail: {output_file}")
-        return output_file
-
-# ============ STEP 7: METADATA GENERATION ============
-class StoryMetadataGenerator:
-    """Generate YouTube metadata for kids stories"""
-
-    @staticmethod
-    def generate(story: Dict) -> Dict:
-        print("Generating metadata...")
-
-        title_templates = [
-            f"{story['title']} | Hindi Kids Story | Moral Story",
-            f"{story['title']} | Animated Hindi Story for Children",
-            f"Hindi Kahani: {story['title']} | Kids Moral Story",
-        ]
-        title = random.choice(title_templates)
-
-        description = f"""{story['title']}
-
-{story['title_en']}
-
-Moral: {story['moral']}
-Category: {story['category'].capitalize()}
-Characters: {', '.join(story['characters'])}
-
-Enjoy this beautiful Hindi moral story for kids!
-
-Features:
-- Animated Text with Word Highlighting
-- Kid-Friendly Visuals
-- Clear Hindi Voice
-- Moral Learning
-
-#HindiStories #KidsStories #MoralStories #HindiKahani #ChildrenStories #BedtimeStories"""
-
-        tags = [
-            story["title"], "hindi story", "kids story", "moral story",
-            "hindi kahani", "children story", "bedtime story", story["category"],
-            "animated story", "hindi moral story", "kids learning",
-            "hindi cartoon", "bachon ki kahani", "hindi kids content"
-        ]
-
-        print("Metadata generated")
-        return {"title": title, "description": description, "tags": tags}
-
-# ============ STEP 8: YOUTUBE UPLOAD ============
-class YouTubeUploader:
-    """Upload video to YouTube"""
-
-    @staticmethod
-    def upload(video_file: str, thumbnail_file: str, metadata: Dict) -> Optional[str]:
-        print("Uploading to YouTube...")
-
-        try:
-            try:
-                with open("client_secret.json", "w", encoding="utf-8") as f:
-                    f.write(CONFIG["YOUTUBE_CLIENT_SECRET"])
-
-                if CONFIG["YOUTUBE_TOKEN_PICKLE_BASE64"]:
-                    token_data = base64.b64decode(CONFIG["YOUTUBE_TOKEN_PICKLE_BASE64"])
-                    with open("token.pickle", "wb") as f:
-                        f.write(token_data)
-            except Exception as e:
-                print(f"   Auth setup warning: {e}")
-
-            with open("token.pickle", "rb") as f:
-                credentials = pickle.load(f)
-
-            from googleapiclient.discovery import build
-            from googleapiclient.http import MediaFileUpload
-
-            youtube = build("youtube", "v3", credentials=credentials)
-
-            body = {
-                "snippet": {
-                    "title": metadata["title"][:100],
-                    "description": metadata["description"][:5000],
-                    "tags": metadata["tags"][:500],
-                    "categoryId": "1",
-                    "defaultLanguage": "hi",
-                    "defaultAudioLanguage": "hi"
-                },
-                "status": {
-                    "privacyStatus": "public",
-                    "selfDeclaredMadeForKids": True,
-                    "publishAt": None
-                }
-            }
-
-            print("   Uploading video...")
-            request = youtube.videos().insert(
-                part="snippet,status",
-                body=body,
-                media_body=MediaFileUpload(video_file, chunksize=-1, resumable=True)
-            )
-
-            response = request.execute()
-            video_id = response.get('id')
-            print(f"Video uploaded: https://youtube.com/watch?v={video_id}")
-
-            if thumbnail_file and os.path.exists(thumbnail_file):
-                print("   Uploading thumbnail...")
-                youtube.thumbnails().set(
-                    videoId=video_id,
-                    media_body=MediaFileUpload(thumbnail_file)
-                ).execute()
-                print("Thumbnail uploaded")
-
-            return video_id
-
-        except Exception as e:
-            print(f"Upload failed: {e}")
-            return None
-        finally:
-            for f in ["client_secret.json", "token.pickle"]:
-                if os.path.exists(f):
-                    os.remove(f)
-
-# ============ STEP 9: ANALYTICS ============
-class AnalyticsTracker:
-    """Track video performance"""
-
-    @staticmethod
-    def track(video_id: str, story: Dict) -> Dict:
-        print("Tracking analytics...")
-
-        analytics = {
-            "timestamp": datetime.now().isoformat(),
-            "video_id": video_id,
-            "story": {
-                "title": story["title"],
-                "category": story["category"],
-                "moral": story["moral"]
-            },
-            "platform": "youtube",
-            "metrics": {"views": 0, "likes": 0, "comments": 0}
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Trending Songs Uploader</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg2: #111118;
+            --card: rgba(22, 22, 32, 0.85);
+            --card-hover: rgba(30, 30, 45, 0.95);
+            --border: rgba(255, 255, 255, 0.06);
+            --border-accent: rgba(255, 107, 53, 0.3);
+            --fg: #f0ece6;
+            --fg-muted: #8a8694;
+            --accent: #ff6b35;
+            --accent2: #ff3d00;
+            --accent-glow: rgba(255, 107, 53, 0.25);
+            --success: #00e676;
+            --warning: #ffab00;
+            --error: #ff1744;
+            --info: #00b0ff;
+            --glass: rgba(255, 255, 255, 0.03);
         }
 
-        with open(f"{CONFIG['OUTPUT_DIR']}/analytics.json", "w", encoding="utf-8") as f:
-            json.dump(analytics, f, indent=2, ensure_ascii=False)
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-        print("Analytics saved")
-        return analytics
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
 
-# ============ MAIN PIPELINE ============
-def main():
-    print("=" * 60)
-    print("HINDI KIDS STORIES VIDEO GENERATOR")
-    print("=" * 60)
+        /* === ANIMATED BACKGROUND === */
+        .bg-scene {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
 
-    start_time = time.time()
+        .bg-scene .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(120px);
+            animation: orbFloat 12s ease-in-out infinite;
+        }
 
-    story = StorySelector.select_story()
+        .bg-scene .orb:nth-child(1) {
+            width: 500px; height: 500px;
+            background: radial-gradient(circle, rgba(255,107,53,0.15), transparent 70%);
+            top: -10%; left: -5%;
+            animation-duration: 15s;
+        }
 
-    audio_file = HindiTTSGenerator.generate(story["content"], "audio.mp3")
+        .bg-scene .orb:nth-child(2) {
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, rgba(255,61,0,0.1), transparent 70%);
+            bottom: -15%; right: -5%;
+            animation-duration: 18s;
+            animation-delay: -5s;
+        }
 
-    beats, duration = AudioAnalyzer.analyze(audio_file)
+        .bg-scene .orb:nth-child(3) {
+            width: 300px; height: 300px;
+            background: radial-gradient(circle, rgba(255,171,0,0.08), transparent 70%);
+            top: 40%; left: 50%;
+            animation-duration: 20s;
+            animation-delay: -8s;
+        }
 
-    bg_video = BackgroundVideoFetcher.fetch(story["color_theme"], duration)
+        .bg-grid {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+        }
 
-    renderer = StoryVideoRenderer(story, beats, duration)
-    video_file = renderer.render(bg_video)
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -40px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.95); }
+        }
 
-    thumbnail_file = StoryThumbnailGenerator.generate(story, f"{CONFIG['OUTPUT_DIR']}/thumbnail.jpg")
+        /* === LAYOUT === */
+        .app-container {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            min-height: 100vh;
+        }
 
-    metadata = StoryMetadataGenerator.generate(story)
+        /* === SIDEBAR === */
+        .sidebar {
+            width: 260px;
+            background: var(--bg2);
+            border-right: 1px solid var(--border);
+            padding: 24px 0;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100vh;
+            z-index: 10;
+            transition: transform 0.3s ease;
+        }
 
-    video_id = YouTubeUploader.upload(video_file, thumbnail_file, metadata)
+        .sidebar-brand {
+            padding: 0 24px 28px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 16px;
+        }
 
-    if video_id:
-        AnalyticsTracker.track(video_id, story)
+        .sidebar-brand h2 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-    if os.path.exists(CONFIG["TEMP_DIR"]):
-        shutil.rmtree(CONFIG["TEMP_DIR"])
+        .sidebar-brand h2 i {
+            font-size: 22px;
+        }
 
-    if os.path.exists("audio.mp3"):
-        os.remove("audio.mp3")
+        .sidebar-brand span {
+            font-size: 11px;
+            color: var(--fg-muted);
+            display: block;
+            margin-top: 4px;
+            font-weight: 400;
+        }
 
-    elapsed = time.time() - start_time
-    print(f"\n{'=' * 60}")
-    print(f"PIPELINE COMPLETE!")
-    print(f"Time: {elapsed:.1f}s")
-    if video_id:
-        print(f"Video: https://youtube.com/watch?v={video_id}")
-    print(f"{'=' * 60}")
+        .nav-section {
+            padding: 0 12px;
+            flex: 1;
+        }
 
-if __name__ == "__main__":
-    main()
+        .nav-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--fg-muted);
+            padding: 12px 12px 8px;
+            font-weight: 600;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 11px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--fg-muted);
+            margin-bottom: 2px;
+            position: relative;
+        }
+
+        .nav-item:hover {
+            background: var(--glass);
+            color: var(--fg);
+        }
+
+        .nav-item.active {
+            background: var(--accent-glow);
+            color: var(--accent);
+            border: 1px solid var(--border-accent);
+        }
+
+        .nav-item i {
+            width: 20px;
+            text-align: center;
+            font-size: 15px;
+        }
+
+        .nav-item .badge {
+            margin-left: auto;
+            background: var(--accent);
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 20px;
+        }
+
+        .sidebar-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .sidebar-footer .user-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sidebar-footer .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            color: #fff;
+        }
+
+        .sidebar-footer .user-name {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .sidebar-footer .user-role {
+            font-size: 11px;
+            color: var(--fg-muted);
+        }
+
+        /* === MAIN CONTENT === */
+        .main-content {
+            margin-left: 260px;
+            flex: 1;
+            padding: 28px 32px;
+            max-width: calc(100% - 260px);
+        }
+
+        /* === TOP BAR === */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+
+        .top-bar h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .top-bar h1 span {
+            color: var(--accent);
+        }
+
+        .top-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        /* === BUTTONS === */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: 10px;
+            border: none;
+            font-family: 'Outfit', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff;
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(255,107,53,0.4);
+        }
+
+        .btn-secondary {
+            background: var(--card);
+            color: var(--fg);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--border-accent);
+            background: var(--card-hover);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--fg-muted);
+            padding: 8px 12px;
+        }
+
+        .btn-ghost:hover {
+            color: var(--fg);
+            background: var(--glass);
+        }
+
+        .btn-sm {
+            padding: 7px 14px;
+            font-size: 12px;
+        }
+
+        .btn-icon {
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--fg-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-icon:hover {
+            border-color: var(--border-accent);
+            color: var(--accent);
+        }
+
+        /* === STATS ROW === */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-3px);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+        }
+
+        .stat-card:nth-child(1)::before { background: linear-gradient(90deg, var(--accent), transparent); }
+        .stat-card:nth-child(2)::before { background: linear-gradient(90deg, var(--success), transparent); }
+        .stat-card:nth-child(3)::before { background: linear-gradient(90deg, var(--warning), transparent); }
+        .stat-card:nth-child(4)::before { background: linear-gradient(90deg, var(--info), transparent); }
+
+        .stat-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            margin-bottom: 14px;
+        }
+
+        .stat-card:nth-child(1) .stat-icon { background: rgba(255,107,53,0.15); color: var(--accent); }
+        .stat-card:nth-child(2) .stat-icon { background: rgba(0,230,118,0.12); color: var(--success); }
+        .stat-card:nth-child(3) .stat-icon { background: rgba(255,171,0,0.12); color: var(--warning); }
+        .stat-card:nth-child(4) .stat-icon { background: rgba(0,176,255,0.12); color: var(--info); }
+
+        .stat-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--fg-muted);
+            font-weight: 500;
+        }
+
+        /* === SECTION === */
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+            animation: fadeSlideIn 0.4s ease;
+        }
+
+        @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        /* === SEARCH BAR === */
+        .search-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .search-input-wrap {
+            flex: 1;
+            position: relative;
+        }
+
+        .search-input-wrap i {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--fg-muted);
+            font-size: 14px;
+        }
+
+        .search-input-wrap input {
+            width: 100%;
+            padding: 12px 16px 12px 42px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--fg);
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.25s ease;
+        }
+
+        .search-input-wrap input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .search-input-wrap input::placeholder {
+            color: var(--fg-muted);
+        }
+
+        /* === TRENDING SONGS GRID === */
+        .songs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .song-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .song-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+        }
+
+        .song-thumb {
+            width: 100%;
+            height: 170px;
+            object-fit: cover;
+            display: block;
+            position: relative;
+        }
+
+        .song-thumb-wrap {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .song-thumb-wrap::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: linear-gradient(transparent, rgba(10,10,15,0.8));
+        }
+
+        .song-rank {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(10px);
+            color: var(--accent);
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            z-index: 2;
+        }
+
+        .song-duration {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 6px;
+            z-index: 2;
+        }
+
+        .song-info {
+            padding: 16px;
+        }
+
+        .song-title {
+            font-weight: 700;
+            font-size: 15px;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .song-artist {
+            font-size: 13px;
+            color: var(--fg-muted);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .song-meta {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            font-size: 11px;
+            color: var(--fg-muted);
+            margin-bottom: 14px;
+        }
+
+        .song-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .song-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .song-actions .btn {
+            flex: 1;
+            justify-content: center;
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+
+        .btn-add {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff;
+            border: none;
+        }
+
+        .btn-add:hover {
+            opacity: 0.9;
+        }
+
+        .btn-added {
+            background: rgba(0,230,118,0.15);
+            color: var(--success);
+            border: 1px solid rgba(0,230,118,0.3);
+        }
+
+        /* === UPLOAD QUEUE TABLE === */
+        .queue-container {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .queue-header-bar {
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .queue-header-bar h3 {
+            font-weight: 700;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .queue-count {
+            background: var(--accent);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+        }
+
+        .queue-list {
+            list-style: none;
+        }
+
+        .queue-item {
+            display: grid;
+            grid-template-columns: 40px 60px 1fr 120px 130px 100px 80px;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.2s ease;
+        }
+
+        .queue-item:hover {
+            background: var(--glass);
+        }
+
+        .queue-item:last-child {
+            border-bottom: none;
+        }
+
+        .queue-num {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--fg-muted);
+        }
+
+        .queue-thumb {
+            width: 56px;
+            height: 38px;
+            border-radius: 6px;
+            object-fit: cover;
+        }
+
+        .queue-song-info .q-title {
+            font-weight: 600;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 280px;
+        }
+
+        .queue-song-info .q-artist {
+            font-size: 11px;
+            color: var(--fg-muted);
+        }
+
+        /* Progress bar */
+        .progress-wrap {
+            width: 100%;
+        }
+
+        .progress-label {
+            font-size: 11px;
+            color: var(--fg-muted);
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 10px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            transition: width 0.4s ease;
+            position: relative;
+        }
+
+        .progress-fill.complete {
+            background: linear-gradient(90deg, var(--success), #00c853);
+        }
+
+        .progress-fill.error {
+            background: var(--error);
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 5px 12px;
+            border-radius: 20px;
+        }
+
+        .status-pending {
+            background: rgba(255,255,255,0.06);
+            color: var(--fg-muted);
+        }
+
+        .status-uploading {
+            background: rgba(255,107,53,0.15);
+            color: var(--accent);
+            animation: statusPulse 1.5s ease-in-out infinite;
+        }
+
+        .status-complete {
+            background: rgba(0,230,118,0.12);
+            color: var(--success);
+        }
+
+        .status-error {
+            background: rgba(255,23,68,0.12);
+            color: var(--error);
+        }
+
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .queue-item-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        /* === API CONFIG === */
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .config-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+        }
+
+        .config-card.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .config-card h3 {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-card h3 i {
+            color: var(--accent);
+        }
+
+        .config-card p {
+            font-size: 12px;
+            color: var(--fg-muted);
+            margin-bottom: 18px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--fg-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 11px 14px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--fg);
+            font-family: 'Space Grotesk', monospace;
+            font-size: 13px;
+            outline: none;
+            transition: all 0.25s ease;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .form-input::placeholder {
+            color: rgba(138,134,148,0.5);
+        }
+
+        textarea.form-input {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .form-hint {
+            font-size: 11px;
+            color: var(--fg-muted);
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .form-hint i {
+            color: var(--warning);
+            font-size: 10px;
+        }
+
+        /* === GITHUB REFERENCE === */
+        .github-ref {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+            margin-top: 20px;
+        }
+
+        .github-ref h3 {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .github-ref h3 i {
+            color: #fff;
+        }
+
+        .code-block {
+            background: rgba(0,0,0,0.5);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            font-family: 'Space Grotesk', monospace;
+            font-size: 12px;
+            line-height: 1.8;
+            color: #c9d1d9;
+            overflow-x: auto;
+            position: relative;
+            margin-top: 12px;
+        }
+
+        .code-block .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid var(--border);
+            color: var(--fg-muted);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .code-block .copy-btn:hover {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .code-kw { color: var(--accent); }
+        .code-str { color: var(--success); }
+        .code-cm { color: var(--fg-muted); font-style: italic; }
+        .code-fn { color: #79c0ff; }
+        .code-num { color: var(--warning); }
+
+        /* === TOAST === */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+            animation: toastIn 0.35s ease;
+            min-width: 280px;
+            backdrop-filter: blur(20px);
+        }
+
+        .toast.success { border-left: 3px solid var(--success); }
+        .toast.error { border-left: 3px solid var(--error); }
+        .toast.info { border-left: 3px solid var(--info); }
+        .toast.warning { border-left: 3px solid var(--warning); }
+
+        .toast.hiding {
+            animation: toastOut 0.3s ease forwards;
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(40px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toastOut {
+            to { opacity: 0; transform: translateX(40px); }
+        }
+
+        /* === MODAL === */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(6px);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            width: 90%;
+            max-width: 520px;
+            padding: 28px;
+            animation: modalSlide 0.3s ease;
+        }
+
+        @keyframes modalSlide {
+            from { opacity: 0; transform: translateY(20px) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .modal h3 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .modal p {
+            font-size: 13px;
+            color: var(--fg-muted);
+            margin-bottom: 20px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 24px;
+        }
+
+        /* === EMPTY STATE === */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--fg-muted);
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.3;
+        }
+
+        .empty-state h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: var(--fg);
+        }
+
+        .empty-state p {
+            font-size: 13px;
+        }
+
+        /* === UPLOAD ANIMATION === */
+        .upload-progress-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(10,10,15,0.92);
+            backdrop-filter: blur(12px);
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .upload-progress-overlay.show {
+            display: flex;
+        }
+
+        .upload-progress-box {
+            text-align: center;
+            width: 400px;
+        }
+
+        .upload-circle {
+            width: 140px;
+            height: 140px;
+            margin: 0 auto 24px;
+            position: relative;
+        }
+
+        .upload-circle svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .upload-circle .track {
+            fill: none;
+            stroke: rgba(255,255,255,0.06);
+            stroke-width: 6;
+        }
+
+        .upload-circle .fill-ring {
+            fill: none;
+            stroke: url(#grad);
+            stroke-width: 6;
+            stroke-linecap: round;
+            stroke-dasharray: 408;
+            stroke-dashoffset: 408;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+
+        .upload-circle .center-text {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .upload-circle .percent {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .upload-circle .sub-text {
+            font-size: 11px;
+            color: var(--fg-muted);
+        }
+
+        .upload-current-song {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .upload-counter {
+            font-size: 13px;
+            color: var(--fg-muted);
+            margin-bottom: 20px;
+        }
+
+        /* === MOBILE === */
+        .mobile-toggle {
+            display: none;
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 20;
+            width: 40px;
+            height: 40px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--fg);
+            font-size: 18px;
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+        }
+
+        @media (max-width: 1024px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .config-grid { grid-template-columns: 1fr; }
+            .queue-item { grid-template-columns: 30px 50px 1fr 80px 80px; }
+            .queue-item:nth-child(n) .queue-item-actions,
+            .queue-item:nth-child(n) .queue-meta-col { display: none; }
+        }
+
+        @media (max-width: 768px) {
+            .mobile-toggle { display: flex; }
+            .sidebar { transform: translateX(-100%); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; padding: 20px 16px; padding-top: 60px; max-width: 100%; }
+            .stats-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .songs-grid { grid-template-columns: 1fr; }
+            .top-bar h1 { font-size: 20px; }
+            .search-bar { flex-direction: column; }
+        }
+
+        /* === SPINNER === */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+        /* Floating music notes animation */
+        .floating-notes {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .note {
+            position: absolute;
+            font-size: 20px;
+            color: var(--accent);
+            opacity: 0;
+            animation: noteFloat 8s ease-in-out infinite;
+        }
+
+        @keyframes noteFloat {
+            0% { opacity: 0; transform: translateY(100vh) rotate(0deg); }
+            10% { opacity: 0.15; }
+            90% { opacity: 0.15; }
+            100% { opacity: 0; transform: translateY(-10vh) rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Background -->
+<div class="bg-scene">
+    <div class="orb"></div>
+    <div class="orb"></div>
+    <div class="orb"></div>
+</div>
+<div class="bg-grid"></div>
+<div class="floating-notes" id="floatingNotes"></div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Mobile Toggle -->
+<button class="mobile-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">
+    <i class="fas fa-bars"></i>
+</button>
+
+<!-- Upload Progress Overlay -->
+<div class="upload-progress-overlay" id="uploadOverlay">
+    <div class="upload-progress-box">
+        <div class="upload-circle">
+            <svg viewBox="0 0 140 140">
+                <defs>
+                    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ff6b35"/>
+                        <stop offset="100%" style="stop-color:#ff3d00"/>
+                    </linearGradient>
+                </defs>
+                <circle class="track" cx="70" cy="70" r="65"/>
+                <circle class="fill-ring" id="uploadRing" cx="70" cy="70" r="65"/>
+            </svg>
+            <div class="center-text">
+                <span class="percent" id="uploadPercent">0%</span>
+                <span class="sub-text">Uploading</span>
+            </div>
+        </div>
+        <div class="upload-current-song" id="uploadSongName">---</div>
+        <div class="upload-counter" id="uploadCounter">0 / 10</div>
+        <button class="btn btn-secondary" onclick="cancelUpload()" style="margin-top:8px;">
+            <i class="fas fa-times"></i> Cancel
+        </button>
+    </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="modalContent"></div>
+</div>
+
+<!-- App -->
+<div class="app-container">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <h2><i class="fab fa-youtube"></i> SongUploader</h2>
+            <span>YouTube Trending Songs Manager</span>
+        </div>
+        <nav class="nav-section">
+            <div class="nav-label">Main</div>
+            <div class="nav-item active" data-section="dashboard" onclick="switchSection('dashboard', this)">
+                <i class="fas fa-chart-pie"></i> Dashboard
+            </div>
+            <div class="nav-item" data-section="trending" onclick="switchSection('trending', this)">
+                <i class="fas fa-fire"></i> Trending Songs
+                <span class="badge">10</span>
+            </div>
+            <div class="nav-item" data-section="queue" onclick="switchSection('queue', this)">
+                <i class="fas fa-list-ol"></i> Upload Queue
+                <span class="badge" id="queueBadge">0</span>
+            </div>
+            <div class="nav-label" style="margin-top:12px;">Settings</div>
+            <div class="nav-item" data-section="api-config" onclick="switchSection('api-config', this)">
+                <i class="fas fa-key"></i> API Configuration
+            </div>
+            <div class="nav-item" data-section="github" onclick="switchSection('github', this)">
+                <i class="fab fa-github"></i> GitHub Reference
+            </div>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <div class="avatar">J</div>
+                <div>
+                    <div class="user-name">Jasvidhani</div>
+                    <div class="user-role">YouTube Creator</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+
+        <!-- ====== DASHBOARD ====== -->
+        <div class="section active" id="section-dashboard">
+            <div class="top-bar">
+                <h1>Welcome, <span>Jasvidhani</span></h1>
+                <div class="top-actions">
+                    <button class="btn btn-primary" onclick="switchSection('trending', document.querySelector('[data-section=trending]'))">
+                        <i class="fas fa-fire"></i> Find Trending Songs
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-icon"><i class="fas fa-music"></i></div>
+                    <div class="stat-value" id="statTotal">10</div>
+                    <div class="stat-label">Trending Songs Found</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="stat-value" id="statUploaded">0</div>
+                    <div class="stat-label">Successfully Uploaded</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><i class="fas fa-clock"></i></div>
+                    <div class="stat-value" id="statPending">0</div>
+                    <div class="stat-label">Pending in Queue</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><i class="fas fa-eye"></i></div>
+                    <div class="stat-value">--</div>
+                    <div class="stat-label">Total Views (All Time)</div>
+                </div>
+            </div>
+
+            <div class="section-header">
+                <h2 class="section-title">Quick Start Guide</h2>
+            </div>
+            <div class="config-grid">
+                <div class="config-card">
+                    <h3><i class="fas fa-1"></i> API Setup</h3>
+                    <p>YouTube Data API v3 key और GitHub repo से API endpoints configure करें।</p>
+                    <button class="btn btn-secondary btn-sm" onclick="switchSection('api-config', document.querySelector('[data-section=api-config]'))">
+                        <i class="fas fa-arrow-right"></i> Go to API Config
+                    </button>
+                </div>
+                <div class="config-card">
+                    <h3><i class="fas fa-2"></i> Find Trending</h3>
+                    <p>10 trending songs discover करें और अपनी queue में add करें।</p>
+                    <button class="btn btn-secondary btn-sm" onclick="switchSection('trending', document.querySelector('[data-section=trending]'))">
+                        <i class="fas fa-arrow-right"></i> Browse Trending
+                    </button>
+                </div>
+                <div class="config-card">
+                    <h3><i class="fas fa-3"></i> Review Queue</h3>
+                    <p>Upload queue check करें, order adjust करें, titles edit करें।</p>
+                    <button class="btn btn-secondary btn-sm" onclick="switchSection('queue', document.querySelector('[data-section=queue]'))">
+                        <i class="fas fa-arrow-right"></i> View Queue
+                    </button>
+                </div>
+                <div class="config-card">
+                    <h3><i class="fas fa-4"></i> Start Upload</h3>
+                    <p>Queue ready होने पर सभी 10 songs एक साथ upload करें।</p>
+                    <button class="btn btn-primary btn-sm" onclick="startBatchUpload()">
+                        <i class="fas fa-rocket"></i> Start Upload
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== TRENDING SONGS ====== -->
+        <div class="section" id="section-trending">
+            <div class="top-bar">
+                <h1>Trending <span>Songs</span></h1>
+                <div class="top-actions">
+                    <button class="btn btn-secondary" onclick="loadTrendingSongs()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                    <button class="btn btn-primary" onclick="addAllToQueue()">
+                        <i class="fas fa-plus-circle"></i> Add All to Queue
+                    </button>
+                </div>
+            </div>
+
+            <div class="search-bar">
+                <div class="search-input-wrap">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchInput" placeholder="Search songs by name, artist..." oninput="filterSongs()">
+                </div>
+                <select class="form-input" style="width:180px;" id="regionFilter" onchange="loadTrendingSongs()">
+                    <option value="IN">India (IN)</option>
+                    <option value="US">United States (US)</option>
+                    <option value="GB">United Kingdom (GB)</option>
+                    <option value="PK">Pakistan (PK)</option>
+                    <option value="BD">Bangladesh (BD)</option>
+                </select>
+            </div>
+
+            <div class="songs-grid" id="songsGrid">
+                <!-- Songs loaded dynamically -->
+            </div>
+        </div>
+
+        <!-- ====== UPLOAD QUEUE ====== -->
+        <div class="section" id="section-queue">
+            <div class="top-bar">
+                <h1>Upload <span>Queue</span></h1>
+                <div class="top-actions">
+                    <button class="btn btn-secondary" onclick="clearQueue()">
+                        <i class="fas fa-trash-alt"></i> Clear Queue
+                    </button>
+                    <button class="btn btn-primary" id="startUploadBtn" onclick="startBatchUpload()">
+                        <i class="fas fa-rocket"></i> Start Upload All
+                    </button>
+                </div>
+            </div>
+
+            <div class="queue-container" id="queueContainer">
+                <div class="queue-header-bar">
+                    <h3>
+                        <i class="fas fa-list-ol" style="color:var(--accent)"></i>
+                        Upload Queue
+                        <span class="queue-count" id="queueCountBadge">0</span>
+                    </h3>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span style="font-size:12px;color:var(--fg-muted);">Auto-advance: </span>
+                        <label style="position:relative;width:40px;height:22px;cursor:pointer;">
+                            <input type="checkbox" id="autoAdvance" checked style="display:none;">
+                            <span id="toggleTrack" style="position:absolute;inset:0;background:var(--accent);border-radius:20px;transition:0.3s;" onclick="this.previousElementSibling.checked=!this.previousElementSibling.checked;this.style.background=this.previousElementSibling.checked?'var(--accent)':'rgba(255,255,255,0.1)'">
+                                <span style="position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:0.3s;transform:translateX(18px);" id="toggleThumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <ul class="queue-list" id="queueList">
+                    <!-- Queue items dynamically -->
+                </ul>
+                <div class="empty-state" id="queueEmpty" style="display:none;">
+                    <i class="fas fa-inbox"></i>
+                    <h3>Queue is Empty</h3>
+                    <p>Trending songs section से songs add करें</p>
+                    <button class="btn btn-primary" style="margin-top:16px;" onclick="switchSection('trending', document.querySelector('[data-section=trending]'))">
+                        <i class="fas fa-fire"></i> Browse Trending
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== API CONFIG ====== -->
+        <div class="section" id="section-api-config">
+            <div class="top-bar">
+                <h1>API <span>Configuration</span></h1>
+                <div class="top-actions">
+                    <button class="btn btn-secondary" onclick="testApiConnection()">
+                        <i class="fas fa-plug"></i> Test Connection
+                    </button>
+                    <button class="btn btn-primary" onclick="saveApiConfig()">
+                        <i class="fas fa-save"></i> Save Config
+                    </button>
+                </div>
+            </div>
+
+            <div class="config-grid">
+                <div class="config-card">
+                    <h3><i class="fab fa-youtube"></i> YouTube Data API v3</h3>
+                    <p>Google Cloud Console से API Key generate करें</p>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" class="form-input" id="ytApiKey" placeholder="AIzaSyD..." value="">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Channel ID</label>
+                        <input type="text" class="form-input" id="ytChannelId" placeholder="UCxxxxxxxxxxxxxxxx">
+                    </div>
+                    <div class="form-hint"><i class="fas fa-exclamation-triangle"></i> API Key सुरक्षित रखें, इसे share न करें</div>
+                </div>
+
+                <div class="config-card">
+                    <h3><i class="fab fa-github"></i> GitHub Repository API</h3>
+                    <p>jasvidhani-star repo से API endpoints</p>
+                    <div class="form-group">
+                        <label class="form-label">GitHub Token</label>
+                        <input type="password" class="form-input" id="ghToken" placeholder="ghp_xxxx...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Repo Endpoint URL</label>
+                        <input type="text" class="form-input" id="ghEndpoint" placeholder="https://api.github.com/repos/jasvidhani-star/..." value="https://api.github.com/repos/jasvidhani-star/youtube-uploader">
+                    </div>
+                    <div class="form-hint"><i class="fas fa-exclamation-triangle"></i> GitHub Personal Access Token बनाएं (repo scope)</div>
+                </div>
+
+                <div class="config-card full-width">
+                    <h3><i class="fas fa-upload"></i> Upload Settings</h3>
+                    <p>Video upload के default settings configure करें</p>
+                    <div class="config-grid" style="gap:16px;">
+                        <div class="form-group">
+                            <label class="form-label">Default Title Template</label>
+                            <input type="text" class="form-input" id="titleTemplate" placeholder="{song_name} - {artist} | Trending Song 2025" value="{song_name} - {artist} | Trending Song 2025">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Default Category</label>
+                            <select class="form-input" id="videoCategory">
+                                <option value="10">Music</option>
+                                <option value="20">Gaming</option>
+                                <option value="22">People & Blogs</option>
+                                <option value="24">Entertainment</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Privacy Status</label>
+                            <select class="form-input" id="privacyStatus">
+                                <option value="public">Public</option>
+                                <option value="unlisted">Unlisted</option>
+                                <option value="private" selected>Private (Recommended)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Default Language</label>
+                            <select class="form-input" id="videoLanguage">
+                                <option value="hi" selected>Hindi</option>
+                                <option value="en">English</option>
+                                <option value="ur">Urdu</option>
+                                <option value="bn">Bengali</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label class="form-label">Default Tags (comma separated)</label>
+                            <input type="text" class="form-input" id="defaultTags" placeholder="trending, song, new song, 2025, hindi song, music" value="trending, song, new song, 2025, hindi song, music, latest, viral, top song">
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label class="form-label">Default Description</label>
+                            <textarea class="form-input" id="defaultDesc" placeholder="Video description...">🎧 Listen to the latest trending song!
+
+Song: {song_name}
+Artist: {artist}
+
+🔔 Subscribe for more trending songs!
+👍 Like & Share if you enjoyed!
+💬 Comment your favorite part!
+
+#trending #song #music #2025 #newrelease</textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== GITHUB REFERENCE ====== -->
+        <div class="section" id="section-github">
+            <div class="top-bar">
+                <h1>GitHub <span>Reference</span></h1>
+                <div class="top-actions">
+                    <a href="https://github.com/jasvidhani-star" target="_blank" class="btn btn-secondary">
+                        <i class="fab fa-github"></i> Open Repository
+                    </a>
+                </div>
+            </div>
+
+            <div class="config-grid">
+                <div class="config-card full-width">
+                    <h3><i class="fab fa-github" style="color:#fff"></i> Repository: jasvidhani-star</h3>
+                    <p>आपके GitHub repo में मौजूद API endpoints और उनका उपयोग</p>
+                </div>
+
+                <div class="config-card">
+                    <h3><i class="fas fa-code"></i> 1. Trending Songs API</h3>
+                    <p>YouTube Data API से trending songs fetch करने का endpoint</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><i class="fas fa-copy"></i> Copy</button>
+<span class="code-cm">// GitHub API से trending songs fetch करें</span>
+<span class="code-kw">const</span> <span class="code-fn">fetchTrending</span> = <span class="code-kw">async</span> () => {
+  <span class="code-kw">const</span> region = <span class="code-str">'IN'</span>;
+  <span class="code-kw">const</span> url = <span class="code-str">`https://api.github.com/repos/
+    jasvidhani-star/youtube-uploader/
+    contents/api/trending?ref=main`</span>;
+
+  <span class="code-kw">const</span> res = <span class="code-kw">await</span> <span class="code-fn">fetch</span>(url, {
+    headers: {
+      <span class="code-str">'Authorization'</span>: <span class="code-str">`token ${GH_TOKEN}`</span>
+    }
+  });
+  <span class="code-kw">return</span> res.<span class="code-fn">json</span>();
+};
+                    </div>
+                </div>
+
+                <div class="config-card">
+                    <h3><i class="fas fa-upload"></i> 2. Upload Video API</h3>
+                    <p>Video upload करने का GitHub Actions based endpoint</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><i class="fas fa-copy"></i> Copy</button>
+<span class="code-cm">// Video upload trigger करें</span>
+<span class="code-kw">const</span> <span class="code-fn">uploadVideo</span> = <span class="code-kw">async</span> (videoData) => {
+  <span class="code-kw">const</span> url = <span class="code-str">`https://api.github.com/repos/
+    jasvidhani-star/youtube-uploader/
+    dispatches`</span>;
+
+  <span class="code-kw">await</span> <span class="code-fn">fetch</span>(url, {
+    method: <span class="code-str">'POST'</span>,
+    headers: {
+      <span class="code-str">'Authorization'</span>: <span class="code-str">`token ${GH_TOKEN}`</span>,
+      <span class="code-str">'Accept'</span>: <span class="code-str">'application/vnd.github.v3+json'</span>
+    },
+    body: JSON.<span class="code-fn">stringify</span>({
+      event_type: <span class="code-str">'video_upload'</span>,
+      client_payload: videoData
+    })
+  });
+};
+                    </div>
+                </div>
+
+                <div class="config-card full-width">
+                    <h3><i class="fas fa-terminal"></i> 3. Complete Upload Flow (cURL)</h3>
+                    <p>Terminal से सीधे upload trigger करने का पूरा command</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><i class="fas fa-copy"></i> Copy</button>
+<span class="code-cm"># Step 1: Trending songs fetch करें</span>
+curl -H <span class="code-str">"Authorization: token YOUR_GH_TOKEN"</span> \
+  <span class="code-str">"https://api.github.com/repos/jasvidhani-star/youtube-uploader/contents/api/trending"</span>
+
+<span class="code-cm"># Step 2: Upload dispatch trigger करें</span>
+curl -X POST \
+  -H <span class="code-str">"Authorization: token YOUR_GH_TOKEN"</span> \
+  -H <span class="code-str">"Accept: application/vnd.github.v3+json"</span> \
+  -d <span class="code-str">'{
+    "event_type": "video_upload",
+    "client_payload": {
+      "video_url": "https://example.com/song.mp4",
+      "title": "Song Name - Artist | Trending 2025",
+      "description": "Listen to...",
+      "tags": ["trending", "song"],
+      "category": "10",
+      "privacy": "private"
+    }
+  }'</span> \
+  <span class="code-str">"https://api.github.com/repos/jasvidhani-star/youtube-uploader/dispatches"</span>
+
+<span class="code-cm"># Step 3: Upload status check करें</span>
+curl -H <span class="code-str">"Authorization: token YOUR_GH_TOKEN"</span> \
+  <span class="code-str">"https://api.github.com/repos/jasvidhani-star/youtube-uploader/actions/runs?per_page=5"</span>
+                    </div>
+                </div>
+
+                <div class="config-card full-width">
+                    <h3><i class="fas fa-file-code"></i> 4. GitHub Actions Workflow Structure</h3>
+                    <p>आपके repo में होना चाहिए ये workflow file</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><i class="fas fa-copy"></i> Copy</button>
+<span class="code-cm"># .github/workflows/upload-video.yml</span>
+<span class="code-kw">name</span>: Upload Video to YouTube
+
+<span class="code-kw">on</span>:
+  <span class="code-kw">repository_dispatch</span>:
+    <span class="code-kw">types</span>: [video_upload]
+
+<span class="code-kw">jobs</span>:
+  <span class="code-kw">upload</span>:
+    <span class="code-kw">runs-on</span>: ubuntu-latest
+    <span class="code-kw">steps</span>:
+      - <span class="code-kw">uses</span>: actions/checkout@v4
+
+      - <span class="code-kw">name</span>: Download Video
+        <span class="code-kw">run</span>: |
+          wget <span class="code-str">"${{ github.event.client_payload.video_url }}"</span> \
+            -O video.mp4
+
+      - <span class="code-kw">name</span>: Upload to YouTube
+        <span class="code-kw">uses</span>: tokyoneon/youtube-upload@<span class="code-num">v1</span>
+        <span class="code-kw">with</span>:
+          credentials: <span class="code-str">${{ secrets.YT_OAUTH }}</span>
+          video: video.mp4
+          title: <span class="code-str">${{ github.event.client_payload.title }}</span>
+          description: <span class="code-str">${{ github.event.client_payload.description }}</span>
+          category: <span class="code-str">${{ github.event.client_payload.category }}</span>
+          tags: <span class="code-str">${{ github.event.client_payload.tags }}</span>
+          privacy: <span class="code-str">${{ github.event.client_payload.privacy }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script>
+    // ============================================
+    // डेटा: 10 Trending Songs (simulated)
+    // ============================================
+    const trendingSongsData = [
+        {
+            id: 1, title: "Pehle Bhi Main", artist: "Vishal Mishra, Sachin-Jigar",
+            views: "285M", duration: "4:12", region: "IN",
+            thumb: "https://picsum.photos/seed/song1/400/250.jpg",
+            category: "Bollywood", trending: "#1"
+        },
+        {
+            id: 2, title: "Satranga", artist: "Arijit Singh, Shreya Ghoshal",
+            views: "412M", duration: "3:58", region: "IN",
+            thumb: "https://picsum.photos/seed/song2/400/250.jpg",
+            category: "Romantic", trending: "#2"
+        },
+        {
+            id: 3, title: "Heeriye", artist: "Jasleen Royal, Arijit Singh",
+            views: "520M", duration: "3:45", region: "IN",
+            thumb: "https://picsum.photos/seed/song3/400/250.jpg",
+            category: "Pop", trending: "#3"
+        },
+        {
+            id: 4, title: "Chaleya", artist: "Arijit Singh, Shilpa Rao",
+            views: "380M", duration: "4:22", region: "IN",
+            thumb: "https://picsum.photos/seed/song4/400/250.jpg",
+            category: "Bollywood", trending: "#4"
+        },
+        {
+            id: 5, title: "Maan Meri Jaan", artist: "King",
+            views: "890M", duration: "3:32", region: "IN",
+            thumb: "https://picsum.photos/seed/song5/400/250.jpg",
+            category: "Hip-Hop", trending: "#5"
+        },
+        {
+            id: 6, title: "Pasoori Nu", artist: "Ali Sethi, Shae Gill",
+            views: "750M", duration: "3:57", region: "IN",
+            thumb: "https://picsum.photos/seed/song6/400/250.jpg",
+            category: "Fusion", trending: "#6"
+        },
+        {
+            id: 7, title: "Kya Baat Hai 2.0", artist: "Hardy Sandhu, Neha Kakkar",
+            views: "340M", duration: "3:28", region: "IN",
+            thumb: "https://picsum.photos/seed/song7/400/250.jpg",
+            category: "Punjabi", trending: "#7"
+        },
+        {
+            id: 8, title: "O Maahi", artist: "Pritam, Arijit Singh",
+            views: "210M", duration: "4:05", region: "IN",
+            thumb: "https://picsum.photos/seed/song8/400/250.jpg",
+            category: "Bollywood", trending: "#8"
+        },
+        {
+            id: 9, title: "Soulmate", artist: "Badshah, Arijit Singh",
+            views: "195M", duration: "3:41", region: "IN",
+            thumb: "https://picsum.photos/seed/song9/400/250.jpg",
+            category: "Pop", trending: "#9"
+        },
+        {
+            id: 10, title: "Angaaron", artist: "Shilpa Rao, Vishal-Shekhar",
+            views: "265M", duration: "4:33", region: "IN",
+            thumb: "https://picsum.photos/seed/song10/400/250.jpg",
+            category: "Bollywood", trending: "#10"
+        }
+    ];
+
+    // ============================================
+    // State Management
+    // ============================================
+    let uploadQueue = [];
+    let isUploading = false;
+    let uploadCancelled = false;
+
+    // ============================================
+    // Navigation
+    // ============================================
+    function switchSection(sectionId, navEl) {
+        // सभी sections छुपाएं
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+        // चुना हुआ section दिखाएं
+        const section = document.getElementById('section-' + sectionId);
+        if (section) section.classList.add('active');
+        if (navEl) navEl.classList.add('active');
+
+        // Mobile पर sidebar बंद करें
+        document.querySelector('.sidebar').classList.remove('open');
+    }
+
+    // ============================================
+    // Trending Songs Rendering
+    // ============================================
+    function loadTrendingSongs() {
+        const grid = document.getElementById('songsGrid');
+        grid.innerHTML = '';
+
+        const searchTerm = (document.getElementById('searchInput').value || '').toLowerCase();
+        const region = document.getElementById('regionFilter').value;
+
+        let filtered = trendingSongsData.filter(s => {
+            const matchSearch = !searchTerm ||
+                s.title.toLowerCase().includes(searchTerm) ||
+                s.artist.toLowerCase().includes(searchTerm);
+            const matchRegion = s.region === region;
+            return matchSearch && matchRegion;
+        });
+
+        if (filtered.length === 0) {
+            grid.innerHTML = `
+                <div class="empty-state" style="grid-column:1/-1;">
+                    <i class="fas fa-search"></i>
+                    <h3>No Songs Found</h3>
+                    <p>कृपया अलग search term या region try करें</p>
+                </div>
+            `;
+            return;
+        }
+
+        filtered.forEach((song, idx) => {
+            const inQueue = uploadQueue.some(q => q.id === song.id);
+            const card = document.createElement('div');
+            card.className = 'song-card';
+            card.setAttribute('data-song-id', song.id);
+            card.innerHTML = `
+                <div class="song-thumb-wrap">
+                    <span class="song-rank">${song.trending}</span>
+                    <img class="song-thumb" src="${song.thumb}" alt="${song.title}" loading="lazy">
+                    <span class="song-duration"><i class="fas fa-clock" style="margin-right:3px;font-size:9px;"></i>${song.duration}</span>
+                </div>
+                <div class="song-info">
+                    <div class="song-title" title="${song.title}">${song.title}</div>
+                    <div class="song-artist"><i class="fas fa-user" style="font-size:10px;"></i> ${song.artist}</div>
+                    <div class="song-meta">
+                        <span><i class="fas fa-eye"></i> ${song.views} views</span>
+                        <span><i class="fas fa-tag"></i> ${song.category}</span>
+                    </div>
+                    <div class="song-actions">
+                        <button class="btn btn-sm ${inQueue ? 'btn-added' : 'btn-add'}" 
+                            onclick="${inQueue ? `removeFromQueue(${song.id})` : `addToQueue(${song.id})`}"
+                            id="addBtn-${song.id}">
+                            <i class="fas ${inQueue ? 'fa-check' : 'fa-plus'}"></i>
+                            ${inQueue ? 'In Queue' : 'Add to Queue'}
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="previewSong(${song.id})">
+                            <i class="fas fa-play"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+            // Staggered animation
+            card.style.opacity = '0';
+            card.style.transform = 'translateY(20px)';
+            card.style.transition = `opacity 0.4s ease ${idx * 0.06}s, transform 0.4s ease ${idx * 0.06}s`;
+            grid.appendChild(card);
+            requestAnimationFrame(() => {
+                card.style.opacity = '1';
+                card.style.transform = 'translateY(0)';
+            });
+        });
+    }
+
+    function filterSongs() {
+        loadTrendingSongs();
+    }
+
+    // ============================================
+    // Queue Management
+    // ============================================
+    function addToQueue(songId) {
+        const song = trendingSongsData.find(s => s.id === songId);
+        if (!song || uploadQueue.some(q => q.id === songId)) return;
+
+        // Title template apply करें
+        const template = document.getElementById('titleTemplate').value || '{song_name} - {artist}';
+        const finalTitle = template
+            .replace('{song_name}', song.title)
+            .replace('{artist}', song.artist);
+
+        uploadQueue.push({
+            ...song,
+            finalTitle: finalTitle,
+            status: 'pending',
+            progress: 0
+        });
+
+        showToast('success', `"${song.title}" queue में add हो गया`);
+        updateQueueUI();
+        updateSongButton(songId, true);
+        updateStats();
+    }
+
+    function removeFromQueue(songId) {
+        const song = uploadQueue.find(q => q.id === songId);
+        uploadQueue = uploadQueue.filter(q => q.id !== songId);
+        if (song) showToast('info', `"${song.title}" queue से हटाया गया`);
+        updateQueueUI();
+        updateSongButton(songId, false);
+        updateStats();
+    }
+
+    function addAllToQueue() {
+        let added = 0;
+        trendingSongsData.forEach(song => {
+            if (!uploadQueue.some(q => q.id === song.id)) {
+                const template = document.getElementById('titleTemplate').value || '{song_name} - {artist}';
+                const finalTitle = template
+                    .replace('{song_name}', song.title)
+                    .replace('{artist}', song.artist);
+                uploadQueue.push({
+                    ...song,
+                    finalTitle: finalTitle,
+                    status: 'pending',
+                    progress: 0
+                });
+                added++;
+            }
+        });
+        if (added > 0) {
+            showToast('success', `${added} songs queue में add हुए`);
+        } else {
+            showToast('info', 'सभी songs पहले से queue में हैं');
+        }
+        loadTrendingSongs();
+        updateQueueUI();
+        updateStats();
+    }
+
+    function clearQueue() {
+        if (uploadQueue.length === 0) return;
+        if (isUploading) {
+            showToast('error', 'Upload चल रहा है, पहले cancel करें');
+            return;
+        }
+        showModal('Clear Queue', 'क्या आप सभी songs queue से हटाना चाहते हैं?', () => {
+            const ids = uploadQueue.map(q => q.id);
+            uploadQueue = [];
+            ids.forEach(id => updateSongButton(id, false));
+            updateQueueUI();
+            updateStats();
+            showToast('info', 'Queue clear हो गया');
+        });
+    }
+
+    function updateSongButton(songId, inQueue) {
+        const btn = document.getElementById('addBtn-' + songId);
+        if (!btn) return;
+        if (inQueue) {
+            btn.className = 'btn btn-sm btn-added';
+            btn.innerHTML = '<i class="fas fa-check"></i> In Queue';
+            btn.onclick = () => removeFromQueue(songId);
+        } else {
+            btn.className = 'btn btn-sm btn-add';
+            btn.innerHTML = '<i class="fas fa-plus"></i> Add to Queue';
+            btn.onclick = () => addToQueue(songId);
+        }
+    }
+
+    function updateQueueUI() {
+        const list = document.getElementById('queueList');
+        const empty = document.getElementById('queueEmpty');
+        const countBadge = document.getElementById('queueCountBadge');
+        const qBadge = document.getElementById('queueBadge');
+
+        countBadge.textContent = uploadQueue.length;
+        qBadge.textContent = uploadQueue.length;
+
+        if (uploadQueue.length === 0) {
+            list.innerHTML = '';
+            empty.style.display = 'block';
+            return;
+        }
+
+        empty.style.display = 'none';
+        list.innerHTML = '';
+
+        uploadQueue.forEach((song, idx) => {
+            const li = document.createElement('li');
+            li.className = 'queue-item';
+
+            const statusClass = song.status === 'complete' ? 'status-complete' :
+                               song.status === 'uploading' ? 'status-uploading' :
+                               song.status === 'error' ? 'status-error' : 'status-pending';
+
+            const statusText = song.status === 'complete' ? '<i class="fas fa-check-circle"></i> Complete' :
+                              song.status === 'uploading' ? '<span class="spinner"></span> Uploading' :
+                              song.status === 'error' ? '<i class="fas fa-times-circle"></i> Error' :
+                              '<i class="fas fa-clock"></i> Pending';
+
+            const progressClass = song.status === 'complete' ? 'complete' :
+                                 song.status === 'error' ? 'error' : '';
+
+            li.innerHTML = `
+                <span class="queue-num">${idx + 1}</span>
+                <img class="queue-thumb" src="${song.thumb}" alt="" loading="lazy">
+                <div class="queue-song-info">
+                    <div class="q-title" title="${song.finalTitle}">${song.finalTitle}</div>
+                    <div class="q-artist">${song.artist} &middot; ${song.duration}</div>
+                </div>
+                <div class="progress-wrap">
+                    <div class="progress-label">
+                        <span>Progress</span>
+                        <span>${song.progress}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill ${progressClass}" style="width:${song.progress}%"></div>
+                    </div>
+                </div>
+                <span class="status-badge ${statusClass}">${statusText}</span>
+                <div class="queue-item-actions">
+                    ${song.status === 'pending' ? `<button class="btn-icon" title="Remove" onclick="removeFromQueue(${song.id})"><i class="fas fa-trash-alt" style="font-size:12px;"></i></button>` : ''}
+                    ${song.status === 'error' ? `<button class="btn-icon" title="Retry" onclick="retrySong(${song.id})"><i class="fas fa-redo" style="font-size:12px;"></i></button>` : ''}
+                </div>
+            `;
+            list.appendChild(li);
+        });
+    }
+
+    function retrySong(songId) {
+        const song = uploadQueue.find(q => q.id === songId);
+        if (song) {
+            song.status = 'pending';
+            song.progress = 0;
+            updateQueueUI();
+            showToast('info', `"${song.title}" retry queue में add हुआ`);
+        }
+    }
+
+    // ============================================
+    // Upload Simulation
+    // ============================================
+    function startBatchUpload() {
+        if (isUploading) {
+            showToast('warning', 'Upload already चल रहा है');
+            return;
+        }
+
+        const pending = uploadQueue.filter(q => q.status === 'pending' || q.status === 'error');
+        if (pending.length === 0) {
+            showToast('warning', 'Queue में कोई pending song नहीं है');
+            return;
+        }
+
+        // API config check
+        const apiKey = document.getElementById('ytApiKey').value;
+        const ghToken = document.getElementById('ghToken').value;
+        if (!apiKey && !ghToken) {
+            showModal('API Keys Required',
+                'YouTube API Key या GitHub Token configure नहीं है। बिना keys के simulation mode में run होगा। क्या आप जारी रखना चाहते हैं?',
+                () => runUploadSequence(pending)
+            );
+            return;
+        }
+
+        runUploadSequence(pending);
+    }
+
+    async function runUploadSequence(songs) {
+        isUploading = true;
+        uploadCancelled = false;
+        const overlay = document.getElementById('uploadOverlay');
+        overlay.classList.add('show');
+
+        const ring = document.getElementById('uploadRing');
+        const percentEl = document.getElementById('uploadPercent');
+        const songNameEl = document.getElementById('uploadSongName');
+        const counterEl = document.getElementById('uploadCounter');
+        const circumference = 2 * Math.PI * 65; // ~408
+
+        let completed = 0;
+        const total = songs.length;
+
+        for (let i = 0; i < songs.length; i++) {
+            if (uploadCancelled) break;
+
+            const song = uploadQueue.find(q => q.id === songs[i].id);
+            if (!song) continue;
+
+            song.status = 'uploading';
+            song.progress = 0;
+            updateQueueUI();
+
+            songNameEl.textContent = song.title;
+            counterEl.textContent = `${i + 1} / ${total}`;
+
+            // Simulate upload progress
+            for (let p = 0; p <= 100; p += Math.floor(Math.random() * 8) + 2) {
+                if (uploadCancelled) break;
+                const actualP = Math.min(p, 100);
+                song.progress = actualP;
+
+                // Update circle
+                const offset = circumference - (actualP / 100) * circumference;
+                ring.style.strokeDashoffset = offset;
+                percentEl.textContent = actualP + '%';
+
+                updateQueueUI();
+                await sleep(150 + Math.random() * 200);
+            }
+
+            if (uploadCancelled) {
+                song.status = 'error';
+                song.progress = 0;
+                updateQueueUI();
+                break;
+            }
+
+            song.progress = 100;
+            song.status = 'complete';
+            completed++;
+            updateQueueUI();
+            updateStats();
+
+            // अगले song से पहले थोड़ा delay
+            if (i < songs.length - 1) {
+                await sleep(800);
+            }
+        }
+
+        // Upload complete
+        ring.style.strokeDashoffset = 0;
+        percentEl.textContent = '100%';
+
+        if (!uploadCancelled) {
+            songNameEl.textContent = 'All Done!';
+            counterEl.textContent = `${completed} / ${total} uploaded`;
+            showToast('success', `${completed} songs successfully upload हो गए!`);
+        } else {
+            songNameEl.textContent = 'Cancelled';
+            showToast('warning', 'Upload cancel किया गया');
+        }
+
+        await sleep(2000);
+        overlay.classList.remove('show');
+        isUploading = false;
+        updateStats();
+    }
+
+    function cancelUpload() {
+        uploadCancelled = true;
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // ============================================
+    // Preview Song (Modal)
+    // ============================================
+    function previewSong(songId) {
+        const song = trendingSongsData.find(s => s.id === songId);
+        if (!song) return;
+
+        const inQueue = uploadQueue.some(q => q.id === songId);
+        const template = document.getElementById('titleTemplate').value || '{song_name} - {artist}';
+        const finalTitle = template
+            .replace('{song_name}', song.title)
+            .replace('{artist}', song.artist);
+
+        const desc = document.getElementById('defaultDesc').value
+            .replace('{song_name}', song.title)
+            .replace('{artist}', song.artist);
+
+        const modal = document.getElementById('modalContent');
+        modal.innerHTML = `
+            <div style="display:flex;gap:16px;margin-bottom:20px;">
+                <img src="${song.thumb}" style="width:120px;height:75px;object-fit:cover;border-radius:8px;flex-shrink:0;">
+                <div>
+                    <h3 style="margin-bottom:4px;">${song.title}</h3>
+                    <p style="margin-bottom:0;font-size:12px;">${song.artist} &middot; ${song.duration} &middot; ${song.views} views</p>
+                </div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label">Upload Title</label>
+                <input type="text" class="form-input" value="${finalTitle}" id="previewTitle">
+            </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label">Description Preview</label>
+                <textarea class="form-input" rows="4" readonly style="font-size:12px;">${desc}</textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+                ${inQueue ?
+                    `<button class="btn btn-secondary" onclick="removeFromQueue(${songId});closeModal();">Remove from Queue</button>` :
+                    `<button class="btn btn-primary" onclick="addToQueue(${songId});closeModal();"><i class="fas fa-plus"></i> Add to Queue</button>`
+                }
+            </div>
+        `;
+        document.getElementById('modalOverlay').classList.add('show');
+    }
+
+    // ============================================
+    // API Config
+    // ============================================
+    function saveApiConfig() {
+        const apiKey = document.getElementById('ytApiKey').value;
+        const ghToken = document.getElementById('ghToken').value;
+        const channelId = document.getElementById('ytChannelId').value;
+
+        // LocalStorage में save करें (note: production में ये secure नहीं है)
+        try {
+            localStorage.setItem('yt_config', JSON.stringify({
+                apiKey: btoa(apiKey),
+                ghToken: btoa(ghToken),
+                channelId: channelId,
+                endpoint: document.getElementById('ghEndpoint').value,
+                titleTemplate: document.getElementById('titleTemplate').value,
+                category: document.getElementById('videoCategory').value,
+                privacy: document.getElementById('privacyStatus').value,
+                language: document.getElementById('videoLanguage').value,
+                tags: document.getElementById('defaultTags').value,
+                description: document.getElementById('defaultDesc').value
+            }));
+            showToast('success', 'API Configuration save हो गया');
+        } catch (e) {
+            showToast('error', 'Config save करने में error: ' + e.message);
+        }
+    }
+
+    function loadApiConfig() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('yt_config'));
+            if (saved) {
+                document.getElementById('ytApiKey').value = atob(saved.apiKey || '');
+                document.getElementById('ghToken').value = atob(saved.ghToken || '');
+                document.getElementById('ytChannelId').value = saved.channelId || '';
+                document.getElementById('ghEndpoint').value = saved.endpoint || '';
+                document.getElementById('titleTemplate').value = saved.titleTemplate || '{song_name} - {artist} | Trending Song 2025';
+                document.getElementById('videoCategory').value = saved.category || '10';
+                document.getElementById('privacyStatus').value = saved.privacy || 'private';
+                document.getElementById('videoLanguage').value = saved.language || 'hi';
+                document.getElementById('defaultTags').value = saved.tags || '';
+                document.getElementById('defaultDesc').value = saved.description || '';
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    async function testApiConnection() {
+        const apiKey = document.getElementById('ytApiKey').value;
+        showToast('info', 'API connection test हो रहा है...');
+
+        if (apiKey) {
+            try {
+                const res = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id&key=${apiKey}&maxResults=1`);
+                if (res.ok) {
+                    showToast('success', 'YouTube API connection successful!');
+                } else {
+                    const err = await res.json();
+                    showToast('error', `YouTube API Error: ${err.error?.message || 'Unknown error'}`);
+                }
+            } catch (e) {
+                showToast('error', 'Network error: ' + e.message);
+            }
+        } else {
+            showToast('warning', 'पहले API Key enter करें');
+        }
+    }
+
+    // ============================================
+    // Stats Update
+    // ============================================
+    function updateStats() {
+        const total = trendingSongsData.length;
+        const uploaded = uploadQueue.filter(q => q.status === 'complete').length;
+        const pending = uploadQueue.filter(q => q.status === 'pending' || q.status === 'error').length;
+
+        animateCounter('statTotal', total);
+        animateCounter('statUploaded', uploaded);
+        animateCounter('statPending', pending);
+    }
+
+    function animateCounter(id, target) {
+        const el = document.getElementById(id);
+        const current = parseInt(el.textContent) || 0;
+        if (current === target) return;
+
+        const diff = target - current;
+        const steps = Math.min(Math.abs(diff), 20);
+        const stepVal = diff / steps;
+        let step = 0;
+
+        const interval = setInterval(() => {
+            step++;
+            if (step >= steps) {
+                el.textContent = target;
+                clearInterval(interval);
+            } else {
+                el.textContent = Math.round(current + stepVal * step);
+            }
+        }, 30);
+    }
+
+    // ============================================
+    // Toast Notifications
+    // ============================================
+    function showToast(type, message) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+
+        const icons = {
+            success: 'fa-check-circle',
+            error: 'fa-times-circle',
+            warning: 'fa-exclamation-triangle',
+            info: 'fa-info-circle'
+        };
+        const colors = {
+            success: 'var(--success)',
+            error: 'var(--error)',
+            warning: 'var(--warning)',
+            info: 'var(--info)'
+        };
+
+        toast.innerHTML = `
+            <i class="fas ${icons[type]}" style="color:${colors[type]};font-size:16px;"></i>
+            <span>${message}</span>
+        `;
+
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            setTimeout(() => toast.remove(), 300);
+        }, 3500);
+    }
+
+    // ============================================
+    // Modal
+    // ============================================
+    function showModal(title, message, onConfirm) {
+        const modal = document.getElementById('modalContent');
+        modal.innerHTML = `
+            <h3>${title}</h3>
+            <p>${message}</p>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" id="modalConfirmBtn">Confirm</button>
+            </div>
+        `;
+        document.getElementById('modalConfirmBtn').onclick = () => {
+            closeModal();
+            if (onConfirm) onConfirm();
+        };
+        document.getElementById('modalOverlay').classList.add('show');
+    }
+
+    function closeModal() {
+        document.getElementById('modalOverlay').classList.remove('show');
+    }
+
+    // ESC से modal बंद
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    // Modal overlay click से बंद
+    document.getElementById('modalOverlay').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeModal();
+    });
+
+    // ============================================
+    // Copy Code
+    // ============================================
+    function copyCode(btn) {
+        const codeBlock = btn.parentElement;
+        const text = codeBlock.textContent.replace('Copy', '').trim();
+        navigator.clipboard.writeText(text).then(() => {
+            btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+            setTimeout(() => {
+                btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+            }, 2000);
+        });
+    }
+
+    // ============================================
+    // Floating Music Notes
+    // ============================================
+    function createFloatingNotes() {
+        const container = document.getElementById('floatingNotes');
+        const notes = ['♪', '♫', '♬', '♩', '🎵'];
+
+        for (let i = 0; i < 12; i++) {
+            const note = document.createElement('span');
+            note.className = 'note';
+            note.textContent = notes[Math.floor(Math.random() * notes.length)];
+            note.style.left = Math.random() * 100 + '%';
+            note.style.fontSize = (14 + Math.random() * 18) + 'px';
+            note.style.animationDuration = (6 + Math.random() * 8) + 's';
+            note.style.animationDelay = (Math.random() * 10) + 's';
+            note.style.opacity = '0';
+            container.appendChild(note);
+        }
+    }
+
+    // ============================================
+    // Toggle Switch Fix
+    // ============================================
+    function initToggle() {
+        const toggle = document.getElementById('autoAdvance');
+        const track = document.getElementById('toggleTrack');
+        const thumb = document.getElementById('toggleThumb');
+
+        function updateToggle() {
+            if (toggle.checked) {
+                track.style.background = 'var(--accent)';
+                thumb.style.transform = 'translateX(18px)';
+            } else {
+                track.style.background = 'rgba(255,255,255,0.1)';
+                thumb.style.transform = 'translateX(0)';
+            }
+        }
+
+        toggle.addEventListener('change', updateToggle);
+        updateToggle();
+    }
+
+    // ============================================
+    // Initialize
+    // ============================================
+    document.addEventListener('DOMContentLoaded', () => {
+        loadApiConfig();
+        loadTrendingSongs();
+        updateQueueUI();
+        updateStats();
+        createFloatingNotes();
+        initToggle();
+    });
+</script>
+</body>
+</html>
